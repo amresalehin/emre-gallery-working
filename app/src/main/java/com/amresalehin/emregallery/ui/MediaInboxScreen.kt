@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -57,11 +58,15 @@ fun MediaInboxScreen(
     onOpenMediaItem: ((String) -> Unit)? = null,
     onOpenMediaWithList: ((String, List<String>) -> Unit)? = null,
     onOpenBrowser: ((String) -> Unit)? = null,
+    onDeepScanClick: (() -> Unit)? = null,
+    isDeepScanning: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     if (initialViewMode == DownloaderViewMode.DISCOVERED_MEDIA) {
         DiscoveredMediaPage(
             onBack = onBack,
+            onDeepScanClick = onDeepScanClick,
+            isDeepScanning = isDeepScanning,
             modifier = modifier.testTag("media_inbox_screen")
         )
     } else {
@@ -85,6 +90,8 @@ fun MediaInboxScreen(
 @Composable
 fun DiscoveredMediaPage(
     onBack: () -> Unit,
+    onDeepScanClick: (() -> Unit)? = null,
+    isDeepScanning: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
@@ -186,6 +193,28 @@ fun DiscoveredMediaPage(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+
+                if (onDeepScanClick != null) {
+                    IconButton(
+                        onClick = onDeepScanClick,
+                        modifier = Modifier.testTag("discovered_media_deep_scan_btn")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (isDeepScanning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(32.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.Radar,
+                                contentDescription = if (isDeepScanning) "Stop deep scan" else "Run deep scan",
+                                tint = if (isDeepScanning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
                 }
 
                 if (filteredItems.isNotEmpty()) {

@@ -177,7 +177,8 @@ object PocketDeepScanEngine {
     private fun createHardwareAcceleratedWebView(context: Context, initialUrl: String): WebView {
         return WebView(context).apply {
             // Hardware acceleration enabled for maximum rendering performance on modern JS apps
-            // No custom software layer applied
+            layoutParams = ViewGroup.LayoutParams(1080, 1920)
+            setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
             settings.apply {
                 javaScriptEnabled = true
@@ -302,12 +303,25 @@ object PocketDeepScanEngine {
                     var vEl = vids[v];
                     var poster = vEl.getAttribute('poster');
                     if (poster) add(poster, 'Video Poster', false);
-                    var vSrc = vEl.currentSrc || vEl.src || vEl.getAttribute('data-src');
+                    var vSrc = vEl.currentSrc || vEl.src || vEl.getAttribute('data-src') || vEl.getAttribute('data-url');
                     if (vSrc) add(vSrc, 'Video', true);
                     var vs = vEl.getElementsByTagName('source');
                     for (var vsIdx = 0; vsIdx < vs.length; vsIdx++) {
-                        var vsSrc = vs[vsIdx].src || vs[vsIdx].getAttribute('data-src');
+                        var vsSrc = vs[vsIdx].src || vs[vsIdx].getAttribute('data-src') || vs[vsIdx].getAttribute('data-url');
                         if (vsSrc) add(vsSrc, 'Video Stream', true);
+                    }
+                }
+
+                // Audio elements
+                var audios = document.getElementsByTagName('audio');
+                for (var a = 0; a < audios.length; a++) {
+                    var aEl = audios[a];
+                    var aSrc = aEl.currentSrc || aEl.src || aEl.getAttribute('data-src');
+                    if (aSrc) add(aSrc, 'Audio', false);
+                    var asrcs = aEl.getElementsByTagName('source');
+                    for (var asIdx = 0; asIdx < asrcs.length; asIdx++) {
+                        var asSrc = asrcs[asIdx].src || asrcs[asIdx].getAttribute('data-src');
+                        if (asSrc) add(asSrc, 'Audio Stream', false);
                     }
                 }
 
@@ -327,8 +341,8 @@ object PocketDeepScanEngine {
                         var resources = window.performance.getEntriesByType('resource');
                         for (var r = 0; r < resources.length; r++) {
                             var rUrl = resources[r].name;
-                            if (rUrl && rUrl.match(/\.(jpe?g|png|webp|avif|mp4|webm|m3u8)(\?.*)?$/i)) {
-                                var isV = !!rUrl.match(/\.(mp4|webm|m3u8)(\?.*)?$/i);
+                            if (rUrl && rUrl.match(/\.(jpe?g|png|webp|avif|gif|mp4|webm|m3u8|mpd)(\?.*)?$/i)) {
+                                var isV = !!rUrl.match(/\.(mp4|webm|m3u8|mpd)(\?.*)?$/i);
                                 add(rUrl, 'Resource Stream', isV);
                             }
                         }

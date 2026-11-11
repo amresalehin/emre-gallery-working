@@ -670,7 +670,12 @@ fun GalleryApp() {
                 viewerStoryTitle = null
             }
             destination == Destination.MEDIA_INBOX -> {
-                destination = if (previousDestination == Destination.ALBUMS) Destination.ALBUMS else Destination.SETTINGS
+                destination = when (previousDestination) {
+                    Destination.ALBUMS -> Destination.ALBUMS
+                    Destination.BROWSER -> Destination.BROWSER
+                    Destination.POCKET -> Destination.POCKET
+                    else -> Destination.SETTINGS
+                }
                 viewerStoryTitle = null
             }
             destination == Destination.VIEWER -> {
@@ -1357,6 +1362,9 @@ fun GalleryApp() {
                             performBackNavigation()
                         },
                         onMenuClick = { showSidePanel = true },
+                        onUrlChange = { url ->
+                            browserInitialUrl = url
+                        },
                         onMediaExtracted = { item -> com.amresalehin.emregallery.data.DownloaderSession.addDiscoveredItem(item) },
                         onBatchExtracted = { batch, title, _ -> com.amresalehin.emregallery.data.DownloaderSession.addDiscoveredItems(batch, title) },
                         onOpenDownloads = {

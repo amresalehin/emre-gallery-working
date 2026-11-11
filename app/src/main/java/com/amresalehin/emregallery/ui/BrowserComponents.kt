@@ -438,6 +438,7 @@ fun BrowserTopBar(
     onHamburgerClick: () -> Unit,
     onDiscoveredMediaClick: () -> Unit,
     discoveredCount: Int = 0,
+    isDeepScanning: Boolean = false,
     onNewTabClick: () -> Unit,
     onReloadClick: () -> Unit,
     onPinCurrentSite: () -> Unit,
@@ -689,29 +690,42 @@ fun BrowserTopBar(
                         .size(42.dp)
                         .testTag("top_bar_download_media_btn")
                 ) {
-                    BadgedBox(
-                        badge = {
-                            if (discoveredCount > 0) {
-                                Badge(
-                                    containerColor = MaterialTheme.colorScheme.primary,
-                                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.testTag("top_bar_media_count_badge")
-                                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        if (isDeepScanning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(34.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        if (discoveredCount > 0) {
+                            // When media counts are shown, show ONLY the counts and no icon
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .testTag("top_bar_media_count_badge")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    val countText = if (discoveredCount > 99) "99+" else "$discoveredCount"
                                     Text(
-                                        text = if (discoveredCount > 99) "99+" else "$discoveredCount",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
+                                        text = countText,
+                                        fontSize = if (countText.length > 2) 10.sp else 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimary
                                     )
                                 }
                             }
+                        } else {
+                            // When no media counts, show android radar icon
+                            Icon(
+                                imageVector = Icons.Default.Radar,
+                                contentDescription = if (isDeepScanning) "Deep scanning media..." else "Discover media",
+                                tint = if (isDeepScanning) MaterialTheme.colorScheme.primary else BrowserThemeColors.iconTint(isDark),
+                                modifier = Modifier.size(24.dp)
+                            )
                         }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = "View discovered media",
-                            tint = if (discoveredCount > 0) MaterialTheme.colorScheme.primary else BrowserThemeColors.iconTint(isDark),
-                            modifier = Modifier.size(24.dp)
-                        )
                     }
                 }
             }
@@ -869,6 +883,53 @@ fun BrowserTopBar(
                                 }
                             )
                         }
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    when {
+                                        isDeepScanning -> "Scanning media (tap to view)"
+                                        discoveredCount > 0 -> "Discover media ($discoveredCount)"
+                                        else -> "Discover media"
+                                    },
+                                    color = BrowserThemeColors.textPrimary(isDark),
+                                    fontWeight = FontWeight.Medium
+                                )
+                            },
+                            leadingIcon = {
+                                when {
+                                    isDeepScanning -> {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    discoveredCount > 0 -> {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = if (discoveredCount > 99) "+" else "$discoveredCount",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onPrimary
+                                                )
+                                            }
+                                        }
+                                    }
+                                    else -> {
+                                        Icon(Icons.Default.Radar, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark))
+                                    }
+                                }
+                            },
+                            onClick = {
+                                showMenu = false
+                                onDiscoveredMediaClick()
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("Share link", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
                             leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },

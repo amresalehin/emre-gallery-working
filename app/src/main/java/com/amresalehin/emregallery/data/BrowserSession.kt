@@ -109,6 +109,13 @@ object BrowserSession {
 
     private val tabRegistry = ConcurrentHashMap<String, BrowserTabSession>()
 
+    // Preserved navigation and scroll state for returning from discovered media view
+    var savedBrowserSite: String = ""
+    var savedScrollX: Int = 0
+    var savedScrollY: Int = 0
+    var pendingScrollRestore: Boolean = false
+    var activeWebView: WebView? = null
+
     fun getTabSession(tabId: String = "tab_main"): BrowserTabSession {
         return tabRegistry.getOrPut(tabId) { BrowserTabSession(tabId = tabId) }
     }
