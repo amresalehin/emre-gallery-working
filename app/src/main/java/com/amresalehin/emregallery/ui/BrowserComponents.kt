@@ -1,6 +1,11 @@
 package com.amresalehin.emregallery.ui
 
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import com.amresalehin.emregallery.data.MediaClassifier
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -41,7 +46,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -318,64 +329,77 @@ fun BrandFavicon(
     isDark: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val d = domain.lowercase()
-    val t = title.lowercase()
-    when {
-        d.contains("duckduckgo") || t.contains("duckduckgo") -> DuckDuckGoLogo(modifier)
-        d.contains("claude") || t.contains("claude") -> ClaudeLogo(modifier)
-        d.contains("wikipedia") || t.contains("wikipedia") -> Box(
-            modifier = modifier
-                .size(38.dp)
-                .background(if (isDark) Color(0xFF262628) else Color.White, shape = CircleShape)
-                .border(1.dp, if (isDark) Color(0xFF38383C) else Color(0xFFEAEAEA), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            WikipediaLogo(Modifier.size(24.dp))
+    val cleanDomain = remember(domain) {
+        val fromClassifier = MediaClassifier.cleanDomainFromUrl(domain)
+        if (fromClassifier.isNotBlank()) {
+            fromClassifier
+        } else {
+            domain.trim()
+                .removePrefix("https://")
+                .removePrefix("http://")
+                .removePrefix("www.")
+                .substringBefore('/')
+                .substringBefore('?')
         }
-        d.contains("youtube") || t.contains("youtube") -> Box(
-            modifier = modifier
-                .size(38.dp)
-                .background(if (isDark) Color(0xFF262628) else Color(0xFFF9FAFB), shape = CircleShape)
-                .border(1.dp, if (isDark) Color(0xFF38383C) else Color(0xFFEAEAEA), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            YouTubeLogo(Modifier.size(26.dp))
+    }
+
+    val faviconUrl = remember(cleanDomain) {
+        if (cleanDomain.isNotBlank() && cleanDomain.contains(".")) {
+            "https://www.google.com/s2/favicons?domain=$cleanDomain&sz=128"
+        } else {
+            ""
         }
-        d.contains("anthropic") || t.contains("anthropic") -> AnthropicAiLogo(modifier)
-        d.contains("github") || t.contains("github") -> Box(
-            modifier = modifier
-                .size(38.dp)
-                .background(if (isDark) Color(0xFF262628) else Color.White, shape = CircleShape)
-                .border(1.dp, if (isDark) Color(0xFF38383C) else Color(0xFFEAEAEA), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            GitHubLogo(Modifier.size(24.dp))
-        }
-        d.contains("drive.google") || t.contains("drive") -> Box(
-            modifier = modifier
-                .size(38.dp)
-                .background(if (isDark) Color(0xFF262628) else Color.White, shape = CircleShape)
-                .border(1.dp, if (isDark) Color(0xFF38383C) else Color(0xFFEAEAEA), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            GoogleDriveLogo(Modifier.size(24.dp))
-        }
-        else -> {
-            val letter = (title.ifBlank { domain }).trim().firstOrNull()?.uppercaseChar()?.toString() ?: "W"
-            Box(
-                modifier = modifier
-                    .size(38.dp)
-                    .background(if (isDark) Color(0xFF262628) else Color(0xFFF4F4F5), shape = CircleShape)
-                    .border(1.dp, if (isDark) Color(0xFF38383C) else Color(0xFFE4E4E7), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = letter,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isDark) Color.White else Color.Black
-                )
+    }
+
+    var isImageLoaded by remember(faviconUrl) { mutableStateOf(false) }
+    var isImageError by remember(faviconUrl) { mutableStateOf(false) }
+
+    Box(
+        modifier = modifier
+            .size(38.dp)
+            .background(if (isDark) Color(0xFF262628) else Color(0xFFF4F4F5), shape = CircleShape)
+            .border(1.dp, if (isDark) Color(0xFF38383C) else Color(0xFFE4E4E7), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        // Fallback UI: Shown when image is still loading or if offline/failed
+        if (!isImageLoaded) {
+            val d = cleanDomain.lowercase()
+            val t = title.lowercase()
+            when {
+                d.contains("duckduckgo") || t.contains("duckduckgo") -> DuckDuckGoLogo(Modifier.size(24.dp))
+                d.contains("claude") || t.contains("claude") -> ClaudeLogo(Modifier.size(24.dp))
+                d.contains("wikipedia") || t.contains("wikipedia") -> WikipediaLogo(Modifier.size(22.dp))
+                d.contains("youtube") || t.contains("youtube") -> YouTubeLogo(Modifier.size(22.dp))
+                d.contains("anthropic") || t.contains("anthropic") -> AnthropicAiLogo(Modifier.size(24.dp))
+                d.contains("github") || t.contains("github") -> GitHubLogo(Modifier.size(22.dp))
+                d.contains("drive.google") || t.contains("drive") -> GoogleDriveLogo(Modifier.size(22.dp))
+                else -> {
+                    val letter = (title.ifBlank { cleanDomain }).trim().firstOrNull()?.uppercaseChar()?.toString() ?: "W"
+                    Text(
+                        text = letter,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isDark) Color.White else Color.Black
+                    )
+                }
             }
+        }
+
+        // Real native site favicon from official S2 service
+        if (faviconUrl.isNotBlank() && !isImageError) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(faviconUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "$title favicon",
+                contentScale = ContentScale.Fit,
+                onSuccess = { isImageLoaded = true },
+                onError = { isImageError = true },
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+            )
         }
     }
 }
@@ -426,11 +450,34 @@ fun BrowserTopBar(
     isWebPage: Boolean = false,
     onHomeClick: (() -> Unit)? = null,
     onCloseBrowser: (() -> Unit)? = null,
+    tabCount: Int = 0,
+    onOpenDownloads: (() -> Unit)? = null,
+    onOpenHistory: (() -> Unit)? = null,
+    onOpenTabs: (() -> Unit)? = null,
     isDark: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var isInputFocused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // Intercept back button when search bar is focused: clears focus and hides keyboard
+    BackHandler(enabled = isInputFocused) {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+        isInputFocused = false
+    }
+
+    val submitSearch = {
+        val trimmed = addressInput.trim()
+        if (trimmed.isNotBlank()) {
+            focusManager.clearFocus()
+            keyboardController?.hide()
+            isInputFocused = false
+            onNavigate(trimmed)
+        }
+    }
 
     val barBorderColor by animateColorAsState(
         targetValue = if (isInputFocused) {
@@ -464,10 +511,16 @@ fun BrowserTopBar(
                 .padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Hamburger Menu or Back to Home
+            // Left Button: When search is focused, always show Left Back button to exit search mode.
+            // When unfocused on a web page, show Back to home.
+            // When unfocused on homepage, show Hamburger Menu.
             IconButton(
                 onClick = {
-                    if (isWebPage && onHomeClick != null) {
+                    if (isInputFocused) {
+                        focusManager.clearFocus()
+                        keyboardController?.hide()
+                        isInputFocused = false
+                    } else if (isWebPage && onHomeClick != null) {
                         onHomeClick()
                     } else {
                         onHamburgerClick()
@@ -478,8 +531,8 @@ fun BrowserTopBar(
                     .testTag("top_bar_hamburger_btn")
             ) {
                 Icon(
-                    imageVector = if (isWebPage) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                    contentDescription = if (isWebPage) "Back to home" else "Menu",
+                    imageVector = if (isInputFocused || isWebPage) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                    contentDescription = if (isInputFocused) "Back" else if (isWebPage) "Back to home" else "Menu",
                     tint = BrowserThemeColors.iconTint(isDark),
                     modifier = Modifier.size(22.dp)
                 )
@@ -543,14 +596,13 @@ fun BrowserTopBar(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Uri,
-                        imeAction = ImeAction.Go
+                        imeAction = ImeAction.Search
                     ),
                     keyboardActions = KeyboardActions(
-                        onGo = {
-                            if (addressInput.isNotBlank()) {
-                                onNavigate(addressInput)
-                            }
-                        }
+                        onSearch = { submitSearch() },
+                        onGo = { submitSearch() },
+                        onDone = { submitSearch() },
+                        onSend = { submitSearch() }
                     ),
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
                         color = BrowserThemeColors.textPrimary(isDark),
@@ -563,54 +615,61 @@ fun BrowserTopBar(
                         .onFocusChanged { focusState ->
                             isInputFocused = focusState.isFocused
                         }
+                        .onPreviewKeyEvent { keyEvent ->
+                            if (keyEvent.key == Key.Enter || keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ENTER) {
+                                if (keyEvent.type == KeyEventType.KeyUp) {
+                                    submitSearch()
+                                }
+                                true // Consume enter key event completely so it never falls through to any other button
+                            } else {
+                                false
+                            }
+                        }
                         .testTag("top_bar_address_input")
                 )
             }
 
-            // Clear 'x' button when typing
+            // Cross (clear 'x') button when typing
             if (addressInput.isNotEmpty()) {
                 IconButton(
                     onClick = { onAddressChange("") },
                     modifier = Modifier
-                        .size(30.dp)
+                        .size(32.dp)
                         .testTag("top_bar_clear_input_btn")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Clear",
+                        contentDescription = "Clear search",
                         tint = BrowserThemeColors.secondaryIconTint(isDark),
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
-            // Dynamic Submit Query Button (revealed when search bar is focused with query)
+            // Dynamic Browser (Submit Search) Button (revealed when search is focused)
             AnimatedVisibility(
-                visible = isInputFocused && addressInput.isNotBlank(),
+                visible = isInputFocused,
                 enter = fadeIn(animationSpec = tween(150)) + expandHorizontally(animationSpec = tween(150)),
                 exit = fadeOut(animationSpec = tween(120)) + shrinkHorizontally(animationSpec = tween(120))
             ) {
                 IconButton(
-                    onClick = {
-                        if (addressInput.isNotBlank()) {
-                            onNavigate(addressInput)
-                        }
-                    },
+                    onClick = { submitSearch() },
+                    enabled = addressInput.isNotBlank(),
                     modifier = Modifier
                         .padding(horizontal = 2.dp)
-                        .size(36.dp)
+                        .size(38.dp)
                         .testTag("top_bar_submit_query_btn")
                 ) {
                     Surface(
                         shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = if (addressInput.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
                         modifier = Modifier.size(28.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                contentDescription = "Submit query",
-                                tint = MaterialTheme.colorScheme.onPrimary,
+                                contentDescription = "Submit search in browser",
+                                tint = if (addressInput.isNotBlank()) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f),
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -618,169 +677,253 @@ fun BrowserTopBar(
                 }
             }
 
-            // Discovered Media Download Icon (dynamically shows number of available scrapped media options)
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onDiscoveredMediaClick)
-                    .testTag("top_bar_download_media_btn"),
-                contentAlignment = Alignment.Center
+            // Discovered Media Download Icon (HIDDEN when search is focused)
+            AnimatedVisibility(
+                visible = !isInputFocused,
+                enter = fadeIn(animationSpec = tween(150)) + expandHorizontally(animationSpec = tween(150)),
+                exit = fadeOut(animationSpec = tween(120)) + shrinkHorizontally(animationSpec = tween(120))
             ) {
-                Icon(
-                    imageVector = Icons.Default.DownloadForOffline,
-                    contentDescription = "View discovered media",
-                    tint = if (discoveredCount > 0) MaterialTheme.colorScheme.primary else BrowserThemeColors.iconTint(isDark),
-                    modifier = Modifier.size(24.dp)
-                )
-                if (discoveredCount > 0) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        shadowElevation = 2.dp,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .offset(x = (-1).dp, y = 1.dp)
-                            .defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
-                            .testTag("top_bar_media_count_badge")
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                        ) {
-                            Text(
-                                text = if (discoveredCount > 99) "99+" else "$discoveredCount",
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                lineHeight = 12.sp,
-                                maxLines = 1
-                            )
+                IconButton(
+                    onClick = onDiscoveredMediaClick,
+                    modifier = Modifier
+                        .size(42.dp)
+                        .testTag("top_bar_download_media_btn")
+                ) {
+                    BadgedBox(
+                        badge = {
+                            if (discoveredCount > 0) {
+                                Badge(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.testTag("top_bar_media_count_badge")
+                                ) {
+                                    Text(
+                                        text = if (discoveredCount > 99) "99+" else "$discoveredCount",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = "View discovered media",
+                            tint = if (discoveredCount > 0) MaterialTheme.colorScheme.primary else BrowserThemeColors.iconTint(isDark),
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 }
             }
 
-            // Three-dot Menu (Immediate Controls)
-            Box(contentAlignment = Alignment.Center) {
-                IconButton(
-                    onClick = { showMenu = true },
-                    modifier = Modifier
-                        .size(42.dp)
-                        .testTag("top_bar_more_menu_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "More controls",
-                        tint = BrowserThemeColors.iconTint(isDark),
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false },
-                    modifier = Modifier
-                        .background(BrowserThemeColors.barSurface(isDark))
-                        .widthIn(min = 210.dp)
-                        .border(1.dp, BrowserThemeColors.barOutline(isDark), RoundedCornerShape(12.dp))
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Home", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
-                        leadingIcon = { Icon(Icons.Default.Home, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
-                        onClick = {
-                            showMenu = false
-                            onHomeClick?.invoke() ?: onNewTabClick()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("New tab", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
-                        leadingIcon = { Icon(Icons.Default.Add, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
-                        onClick = {
-                            showMenu = false
-                            onNewTabClick()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Reload", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
-                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
-                        onClick = {
-                            showMenu = false
-                            onReloadClick()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Add to Shortcuts", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
-                        leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
-                        onClick = {
-                            showMenu = false
-                            onPinCurrentSite()
-                        }
-                    )
-                    if (onSaveToPocket != null) {
-                        DropdownMenuItem(
-                            text = { Text("Save to Pocket", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
-                            leadingIcon = { Icon(Icons.Default.Bookmark, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
-                            onClick = {
-                                showMenu = false
-                                onSaveToPocket()
-                            }
+            // Three-dot Menu (Immediate Controls - HIDDEN when search is focused)
+            AnimatedVisibility(
+                visible = !isInputFocused,
+                enter = fadeIn(animationSpec = tween(150)) + expandHorizontally(animationSpec = tween(150)),
+                exit = fadeOut(animationSpec = tween(120)) + shrinkHorizontally(animationSpec = tween(120))
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    IconButton(
+                        onClick = { showMenu = true },
+                        modifier = Modifier
+                            .size(42.dp)
+                            .testTag("top_bar_more_menu_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "More controls",
+                            tint = BrowserThemeColors.iconTint(isDark),
+                            modifier = Modifier.size(22.dp)
                         )
                     }
-                    DropdownMenuItem(
-                        text = { Text("Share link", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
-                        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
-                        onClick = {
-                            showMenu = false
-                            onShareClick()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("Desktop site", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium)
-                                if (isDesktopMode) {
-                                    Icon(Icons.Default.Check, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark), modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        },
-                        leadingIcon = { Icon(Icons.Default.Computer, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
-                        onClick = {
-                            showMenu = false
-                            onDesktopToggle(!isDesktopMode)
-                        }
-                    )
-                    HorizontalDivider(color = BrowserThemeColors.divider(isDark))
-                    DropdownMenuItem(
-                        text = { Text("Browser settings", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
-                        leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
-                        onClick = {
-                            showMenu = false
-                            onSettingsClick()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Clear browsing history", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
-                        leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
-                        onClick = {
-                            showMenu = false
-                            onClearHistoryClick()
-                        }
-                    )
-                    if (onCloseBrowser != null) {
-                        HorizontalDivider(color = BrowserThemeColors.divider(isDark))
+
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                        modifier = Modifier
+                            .background(BrowserThemeColors.barSurface(isDark))
+                            .widthIn(min = 220.dp)
+                            .border(1.dp, BrowserThemeColors.barOutline(isDark), RoundedCornerShape(12.dp))
+                    ) {
                         DropdownMenuItem(
-                            text = { Text("Close browser", color = Color(0xFFEF4444), fontWeight = FontWeight.Medium) },
-                            leadingIcon = { Icon(Icons.Default.Close, contentDescription = null, tint = Color(0xFFEF4444)) },
+                            text = { Text("New tab", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
                             onClick = {
                                 showMenu = false
-                                onCloseBrowser()
+                                onNewTabClick()
                             }
                         )
+                        if (onOpenTabs != null) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("Tabs", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium)
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = BrowserThemeColors.itemSurface(isDark),
+                                            border = BorderStroke(1.dp, BrowserThemeColors.itemOutline(isDark)),
+                                            modifier = Modifier.padding(start = 8.dp)
+                                        ) {
+                                            val countText = when {
+                                                tabCount > 99 -> ":D"
+                                                tabCount <= 0 -> "1"
+                                                else -> "$tabCount"
+                                            }
+                                            Text(
+                                                text = countText,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = BrowserThemeColors.textPrimary(isDark),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .border(
+                                                width = 1.8.dp,
+                                                color = BrowserThemeColors.iconTint(isDark),
+                                                shape = RoundedCornerShape(4.5.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        val countText = when {
+                                            tabCount > 99 -> ":D"
+                                            tabCount <= 0 -> "1"
+                                            else -> "$tabCount"
+                                        }
+                                        Text(
+                                            text = countText,
+                                            fontSize = if (countText.length > 2) 8.sp else if (countText.length == 2) 9.sp else 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = BrowserThemeColors.iconTint(isDark),
+                                            lineHeight = 11.sp
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onOpenTabs()
+                                }
+                            )
+                        }
+                        if (onOpenHistory != null) {
+                            DropdownMenuItem(
+                                text = { Text("History", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                                leadingIcon = { Icon(Icons.Outlined.History, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                                onClick = {
+                                    showMenu = false
+                                    onOpenHistory()
+                                }
+                            )
+                        }
+                        if (onOpenDownloads != null) {
+                            DropdownMenuItem(
+                                text = { Text("Downloads", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                                leadingIcon = { Icon(Icons.Outlined.FileDownload, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                                onClick = {
+                                    showMenu = false
+                                    onOpenDownloads()
+                                }
+                            )
+                        }
+                        HorizontalDivider(color = BrowserThemeColors.divider(isDark))
+                        DropdownMenuItem(
+                            text = { Text("Home", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                            leadingIcon = { Icon(Icons.Default.Home, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                            onClick = {
+                                showMenu = false
+                                onHomeClick?.invoke() ?: onNewTabClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Reload", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                            leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                            onClick = {
+                                showMenu = false
+                                onReloadClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Add to Shortcuts", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                            leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                            onClick = {
+                                showMenu = false
+                                onPinCurrentSite()
+                            }
+                        )
+                        if (onSaveToPocket != null) {
+                            DropdownMenuItem(
+                                text = { Text("Save to Pocket", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                                leadingIcon = { Icon(Icons.Default.Bookmark, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                                onClick = {
+                                    showMenu = false
+                                    onSaveToPocket()
+                                }
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Share link", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                            leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                            onClick = {
+                                showMenu = false
+                                onShareClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Desktop site", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium)
+                                    if (isDesktopMode) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark), modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            },
+                            leadingIcon = { Icon(Icons.Default.Computer, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                            onClick = {
+                                showMenu = false
+                                onDesktopToggle(!isDesktopMode)
+                            }
+                        )
+                        HorizontalDivider(color = BrowserThemeColors.divider(isDark))
+                        DropdownMenuItem(
+                            text = { Text("Settings", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                            leadingIcon = { Icon(Icons.Outlined.Settings, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                            onClick = {
+                                showMenu = false
+                                onSettingsClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Clear browsing history", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                            leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                            onClick = {
+                                showMenu = false
+                                onClearHistoryClick()
+                            }
+                        )
+                        if (onCloseBrowser != null) {
+                            HorizontalDivider(color = BrowserThemeColors.divider(isDark))
+                            DropdownMenuItem(
+                                text = { Text("Close browser", color = Color(0xFFEF4444), fontWeight = FontWeight.Medium) },
+                                leadingIcon = { Icon(Icons.Default.Close, contentDescription = null, tint = Color(0xFFEF4444)) },
+                                onClick = {
+                                    showMenu = false
+                                    onCloseBrowser()
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -874,7 +1017,7 @@ fun BrowserBottomNavBar(
                 )
             }
 
-            // 3. Tabs (with count badge ONLY if tabCount > 0)
+            // 3. Tabs (Native Android Chrome tab switcher box with inner tab count)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
@@ -885,32 +1028,31 @@ fun BrowserBottomNavBar(
                     .clickable(onClick = onOpenTabs)
                     .testTag("bottom_nav_tabs")
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Outlined.Tab,
-                        contentDescription = "Tabs",
-                        tint = BrowserThemeColors.iconTint(isDark),
-                        modifier = Modifier.size(24.dp)
-                    )
-                    if (tabCount > 0) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .offset(x = 6.dp, y = (-4).dp)
-                                .size(15.dp)
-                                .background(BrowserThemeColors.badgeBg(isDark), shape = CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "$tabCount",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = BrowserThemeColors.badgeText(isDark)
-                            )
-                        }
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .border(
+                            width = 2.dp,
+                            color = BrowserThemeColors.iconTint(isDark),
+                            shape = RoundedCornerShape(5.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val countText = when {
+                        tabCount > 99 -> ":D"
+                        tabCount <= 0 -> "1"
+                        else -> "$tabCount"
                     }
+                    Text(
+                        text = countText,
+                        fontSize = if (countText.length > 2) 9.sp else if (countText.length == 2) 10.sp else 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = BrowserThemeColors.iconTint(isDark),
+                        textAlign = TextAlign.Center,
+                        lineHeight = 12.sp
+                    )
                 }
-                Spacer(Modifier.height(3.dp))
+                Spacer(Modifier.height(4.dp))
                 Text(
                     text = "Tabs",
                     fontSize = 11.sp,
@@ -919,7 +1061,7 @@ fun BrowserBottomNavBar(
                 )
             }
 
-            // 4. Browser Settings
+            // 4. Settings (Native Android Settings gear icon & label)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
@@ -931,14 +1073,14 @@ fun BrowserBottomNavBar(
                     .testTag("bottom_nav_browser_settings")
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Tune,
-                    contentDescription = "Browser settings",
+                    imageVector = Icons.Outlined.Settings,
+                    contentDescription = "Settings",
                     tint = BrowserThemeColors.iconTint(isDark),
                     modifier = Modifier.size(24.dp)
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    text = "Browser",
+                    text = "Settings",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = BrowserThemeColors.textPrimary(isDark)

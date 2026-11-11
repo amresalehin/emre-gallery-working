@@ -297,8 +297,11 @@ object MediaCaptureEngine {
 
                 function processBatch() {
                     scheduleTimeout = null;
-                    var batch = pendingNodes;
-                    pendingNodes = [];
+                    if (pendingNodes.length === 0) return;
+                    var batch = pendingNodes.splice(0, 20);
+                    if (pendingNodes.length > 50) {
+                        pendingNodes.length = 0;
+                    }
                     for (var i = 0; i < batch.length; i++) {
                         checkNode(batch[i]);
                     }
@@ -309,14 +312,18 @@ object MediaCaptureEngine {
                         var mut = mutations[m];
                         if (mut.type === 'childList') {
                             for (var i = 0; i < mut.addedNodes.length; i++) {
-                                pendingNodes.push(mut.addedNodes[i]);
+                                if (pendingNodes.length < 50) {
+                                    pendingNodes.push(mut.addedNodes[i]);
+                                }
                             }
                         } else if (mut.type === 'attributes') {
-                            pendingNodes.push(mut.target);
+                            if (pendingNodes.length < 50) {
+                                pendingNodes.push(mut.target);
+                            }
                         }
                     }
                     if (!scheduleTimeout) {
-                        scheduleTimeout = setTimeout(processBatch, 250);
+                        scheduleTimeout = setTimeout(processBatch, 600);
                     }
                 });
 
@@ -527,12 +534,16 @@ object MediaCaptureEngine {
                 cleanReqPath.endsWith(".ogg") || cleanReqPath.endsWith(".flac") ||
                 cleanReqPath.endsWith(".opus") || acceptHeader.contains("audio/")
 
-        val hasImageExt = cleanReqPath.endsWith(".jpg") || cleanReqPath.endsWith(".jpeg") ||
+        val isUiIconOrFavicon = cleanReqPath.endsWith(".svg") || cleanReqPath.endsWith(".ico") ||
+                cleanReqPath.contains("/favicon") || cleanReqPath.contains("avatar") ||
+                cleanReqPath.contains("pixel") || cleanReqPath.contains("spacer") ||
+                cleanReqPath.contains("1x1") || cleanReqPath.contains("sprite")
+
+        val hasImageExt = !isUiIconOrFavicon && (cleanReqPath.endsWith(".jpg") || cleanReqPath.endsWith(".jpeg") ||
                 cleanReqPath.endsWith(".png") || cleanReqPath.endsWith(".webp") ||
                 cleanReqPath.endsWith(".gif") || cleanReqPath.endsWith(".avif") ||
-                cleanReqPath.endsWith(".svg") || cleanReqPath.endsWith(".bmp") ||
-                cleanReqPath.contains("/vi/") || cleanReqPath.contains("/vi_webp/") ||
-                Regex("""[?&](?:format|fmt|ext)=(?:jpg|jpeg|png|webp|avif)""").containsMatchIn(reqLower)
+                cleanReqPath.endsWith(".bmp") || cleanReqPath.contains("/vi/") || cleanReqPath.contains("/vi_webp/") ||
+                Regex("""[?&](?:format|fmt|ext)=(?:jpg|jpeg|png|webp|avif)""").containsMatchIn(reqLower))
 
         val isImage = hasImageExt && !acceptHeader.contains("text/html")
 

@@ -313,26 +313,13 @@ fun PocketBookmarkViewerPage(
     val offsetX = remember { Animatable(0f) }
     var isSwiping by remember { mutableStateOf(false) }
 
-    // Inspect the live page on entry
-    LaunchedEffect(stack.id, stack.sourceUrl) {
-        if (stack.sourceUrl.startsWith("http://", ignoreCase = true) ||
-            stack.sourceUrl.startsWith("https://", ignoreCase = true)
-        ) {
-            onFetchSiteMedia?.invoke()
-        }
-    }
-
-    // Preload next and previous deck cards into memory cache so visible previews are instantly ready
+    // Preload next deck card into memory cache so visible previews are smoothly ready with minimal RAM
     LaunchedEffect(safeIndex, effectiveMediaList) {
         if (effectiveMediaList.isNotEmpty()) {
             val total = effectiveMediaList.size
-            val preloadIndices = listOf(
-                (safeIndex + 1) % total,
-                (safeIndex + 2) % total,
-                if (safeIndex - 1 < 0) total - 1 else safeIndex - 1
-            ).distinct()
-            for (idx in preloadIndices) {
-                val itm = effectiveMediaList.getOrNull(idx) ?: continue
+            val nextIdx = (safeIndex + 1) % total
+            val itm = effectiveMediaList.getOrNull(nextIdx)
+            if (itm != null) {
                 val path = if (itm.localUri.isNotBlank()) {
                     val f = File(itm.localUri.removePrefix("file://"))
                     if (f.exists()) f.absolutePath else itm.sourceUrl

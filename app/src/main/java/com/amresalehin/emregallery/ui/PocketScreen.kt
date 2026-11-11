@@ -780,6 +780,16 @@ fun PocketSearchPasteCapsule(
                             if (query.isNotBlank()) {
                                 onSearchSubmit(query.trim())
                             }
+                        },
+                        onGo = {
+                            if (query.isNotBlank()) {
+                                onSearchSubmit(query.trim())
+                            }
+                        },
+                        onDone = {
+                            if (query.isNotBlank()) {
+                                onSearchSubmit(query.trim())
+                            }
                         }
                     )
                 )

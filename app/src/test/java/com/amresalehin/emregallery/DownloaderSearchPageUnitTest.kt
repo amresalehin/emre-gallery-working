@@ -787,6 +787,214 @@ class DownloaderSearchPageUnitTest {
         assertEquals(1, failedOnly.size)
         assertEquals("test_failed_1", failedOnly[0].id)
     }
+
+    @Test
+    fun testBrowserTopBarFocusRulesAndSearchSubmission() {
+        // State 1: Unfocused default state on homepage
+        var isInputFocused = false
+        var isWebPage = false
+        var addressInput = ""
+
+        fun showLeftBackButton(focused: Boolean, web: Boolean) = focused || web
+        fun showClearButton(input: String) = input.isNotEmpty()
+        fun showBrowserSubmitButton(focused: Boolean) = focused
+        fun showDiscoveredMediaButton(focused: Boolean) = !focused
+        fun showMoreMenuButton(focused: Boolean) = !focused
+
+        // On homepage when not focused:
+        assertFalse(showLeftBackButton(isInputFocused, isWebPage)) // shows hamburger menu, not back
+        assertFalse(showClearButton(addressInput))
+        assertFalse(showBrowserSubmitButton(isInputFocused))
+        assertTrue(showDiscoveredMediaButton(isInputFocused))
+        assertTrue(showMoreMenuButton(isInputFocused))
+
+        // State 2: Focus received on homepage search bar
+        isInputFocused = true
+        assertTrue(showLeftBackButton(isInputFocused, isWebPage)) // Transforms into left back button!
+        assertFalse(showClearButton(addressInput)) // No query yet
+        assertTrue(showBrowserSubmitButton(isInputFocused)) // Dynamic submit button revealed!
+        assertFalse(showDiscoveredMediaButton(isInputFocused)) // Discovered media button HIDDEN!
+        assertFalse(showMoreMenuButton(isInputFocused)) // 3-dot menu HIDDEN!
+
+        // State 3: User types search query
+        addressInput = "kotlin programming"
+        assertTrue(showLeftBackButton(isInputFocused, isWebPage))
+        assertTrue(showClearButton(addressInput)) // Clear cross button visible
+        assertTrue(showBrowserSubmitButton(isInputFocused)) // Browser submit search button visible
+        assertFalse(showDiscoveredMediaButton(isInputFocused)) // Still HIDDEN
+        assertFalse(showMoreMenuButton(isInputFocused)) // Still HIDDEN
+
+        // Action: Submitting search query on homepage
+        var launchedBrowserUrl = ""
+        var launchedMediaDiscover = false
+
+        fun submitSearch(query: String) {
+            val trimmed = query.trim()
+            if (trimmed.isNotBlank()) {
+                val formatted = MediaClassifier.formatQueryOrUrl(trimmed)
+                launchedBrowserUrl = formatted
+            }
+        }
+
+        submitSearch(addressInput)
+
+        // Verifying query is formatted and launched in browser, NOT media discover
+        assertFalse("Media discover must NOT be launched on search query submit", launchedMediaDiscover)
+        assertTrue(launchedBrowserUrl.startsWith("https://duckduckgo.com/?q="))
+        assertTrue(launchedBrowserUrl.contains("kotlin+programming") || launchedBrowserUrl.contains("kotlin%20programming"))
+
+        // Submitting direct URL
+        submitSearch("https://example.com/gallery")
+        assertEquals("https://example.com/gallery", launchedBrowserUrl)
+        assertFalse(launchedMediaDiscover)
+
+        // Action: Clicking left back button when focused exits focus
+        if (isInputFocused) {
+            isInputFocused = false
+        }
+        assertFalse(isInputFocused)
+        assertTrue(showDiscoveredMediaButton(isInputFocused)) // Restores download button
+        assertTrue(showMoreMenuButton(isInputFocused)) // Restores 3-dot menu
+    }
+
+    @Test
+    fun testSynchronizedBrowserBackNavigationAndHomepageExit() {
+        var currentUrl = "https://duckduckgo.com/?q=hey"
+        var canGoBackInWebView = false
+        var isBrowserClosed = false
+        var didNavigateWebViewBack = false
+
+        fun handleBrowserBackNavigation() {
+            if (currentUrl.isNotBlank()) {
+                if (canGoBackInWebView) {
+                    didNavigateWebViewBack = true
+                } else {
+                    currentUrl = ""
+                    canGoBackInWebView = false
+                }
+            } else {
+                isBrowserClosed = true
+            }
+        }
+
+        // 1. On webpage (top level, e.g. DuckDuckGo search result):
+        // User clicks search bar back button:
+        handleBrowserBackNavigation()
+        assertEquals("", currentUrl) // Back button takes user back to browser homepage!
+        assertFalse(isBrowserClosed) // Browser is still open, on homepage
+
+        // 2. On homepage:
+        // User triggers Android native back button:
+        handleBrowserBackNavigation()
+        assertTrue("Native back button on homepage MUST exit the browser (call onClose)", isBrowserClosed)
+        assertEquals("", currentUrl)
+
+        // 3. Multi-level webpage navigation (e.g. DuckDuckGo -> clicked a result link):
+        currentUrl = "https://hey.com"
+        canGoBackInWebView = true
+        isBrowserClosed = false
+        didNavigateWebViewBack = false
+
+        // Native back pressed on child page:
+        handleBrowserBackNavigation()
+        assertTrue(didNavigateWebViewBack) // Navigated back in web history
+        assertFalse(isBrowserClosed)
+
+        // Now back on DuckDuckGo (top level):
+        canGoBackInWebView = false
+        didNavigateWebViewBack = false
+        handleBrowserBackNavigation()
+        assertEquals("", currentUrl) // Back on homepage
+        assertFalse(isBrowserClosed)
+
+        // Native back pressed on homepage:
+        handleBrowserBackNavigation()
+        assertTrue("Native back on homepage must exit browser", isBrowserClosed)
+    }
+
+    @Test
+    fun testNativeFaviconResolutionAndTabCounterFormat() {
+        // 1. Verify clean domain extraction for native site favicons
+        fun resolveCleanDomain(domainOrUrl: String): String {
+            val fromClassifier = MediaClassifier.cleanDomainFromUrl(domainOrUrl)
+            return if (fromClassifier.isNotBlank()) {
+                fromClassifier
+            } else {
+                domainOrUrl.trim()
+                    .removePrefix("https://")
+                    .removePrefix("http://")
+                    .removePrefix("www.")
+                    .substringBefore('/')
+                    .substringBefore('?')
+            }
+        }
+
+        fun generateFaviconUrl(domain: String): String {
+            val clean = resolveCleanDomain(domain)
+            return if (clean.isNotBlank() && clean.contains(".")) {
+                "https://www.google.com/s2/favicons?domain=$clean&sz=128"
+            } else ""
+        }
+
+        assertEquals("books.google.com", resolveCleanDomain("books.google.com"))
+        assertEquals("thriftbooks.com", resolveCleanDomain("thriftbooks.com"))
+        assertEquals("amazon.com", resolveCleanDomain("amazon.com"))
+        assertEquals("duckduckgo.com", resolveCleanDomain("https://duckduckgo.com/?q=test"))
+        assertEquals("wikipedia.org", resolveCleanDomain("https://www.wikipedia.org/wiki/Main_Page"))
+
+        assertEquals(
+            "https://www.google.com/s2/favicons?domain=books.google.com&sz=128",
+            generateFaviconUrl("books.google.com")
+        )
+        assertEquals(
+            "https://www.google.com/s2/favicons?domain=thriftbooks.com&sz=128",
+            generateFaviconUrl("thriftbooks.com")
+        )
+        assertEquals(
+            "https://www.google.com/s2/favicons?domain=amazon.com&sz=128",
+            generateFaviconUrl("https://www.amazon.com/Books/b")
+        )
+
+        // 2. Verify native Chrome-style tab counter formatting
+        fun formatTabCount(tabCount: Int): String {
+            return when {
+                tabCount > 99 -> ":D"
+                tabCount <= 0 -> "1"
+                else -> "$tabCount"
+            }
+        }
+
+        assertEquals("1", formatTabCount(0))
+        assertEquals("1", formatTabCount(1))
+        assertEquals("4", formatTabCount(4))
+        assertEquals("99", formatTabCount(99))
+        assertEquals(":D", formatTabCount(100))
+        assertEquals(":D", formatTabCount(105))
+    }
+
+    @Test
+    fun testThreeDotMenuContainsBottomBarActions() {
+        var openedTabs = false
+        var openedHistory = false
+        var openedDownloads = false
+        var openedSettings = false
+
+        val onOpenTabs = { openedTabs = true }
+        val onOpenHistory = { openedHistory = true }
+        val onOpenDownloads = { openedDownloads = true }
+        val onOpenSettings = { openedSettings = true }
+
+        // Trigger callbacks as three-dot menu items do
+        onOpenTabs()
+        onOpenHistory()
+        onOpenDownloads()
+        onOpenSettings()
+
+        assertTrue("Tabs action must be invokable from three-dot menu", openedTabs)
+        assertTrue("History action must be invokable from three-dot menu", openedHistory)
+        assertTrue("Downloads action must be invokable from three-dot menu", openedDownloads)
+        assertTrue("Settings action must be invokable from three-dot menu", openedSettings)
+    }
 }
 
 

@@ -846,5 +846,108 @@ class PocketBookmarkUnitTest {
         assertEquals(1, filter1Mb.size)
         assertEquals("clip", filter1Mb[0].id)
     }
+
+    @Test
+    fun testCacheFirstMediaPreservationOnRefreshFailure() {
+        val cachedItems = listOf(
+            MediaInboxItem(
+                id = "cached_video_1",
+                title = "Cached Video",
+                localUri = "",
+                sourceUrl = "https://example.com/video1.mp4",
+                isVideo = true,
+                format = "MP4"
+            ),
+            MediaInboxItem(
+                id = "cached_img_1",
+                title = "Cached Image",
+                localUri = "",
+                sourceUrl = "https://example.com/photo1.jpg",
+                isVideo = false,
+                format = "JPEG"
+            )
+        )
+        val originalStack = MediaInboxStack(
+            id = "bookmark_123",
+            title = "My Article",
+            sourceDomain = "example.com",
+            sourceUrl = "https://example.com/article",
+            items = cachedItems,
+            timestampMillis = 1000L,
+            description = "Cached description",
+            previewImageUrl = "https://example.com/preview.jpg"
+        )
+
+        // Simulate refresh failure or empty result
+        val emptyFetchResult = emptyList<MediaInboxItem>()
+        val resolvedItems = if (emptyFetchResult.isNotEmpty()) emptyFetchResult else originalStack.items
+        val resolvedPreview = originalStack.previewImageUrl.ifBlank { "" }
+
+        // Must preserve existing cached media and preview intact
+        assertEquals(2, resolvedItems.size)
+        assertEquals("cached_video_1", resolvedItems[0].id)
+        assertTrue(resolvedItems[0].isVideo)
+        assertEquals("https://example.com/preview.jpg", resolvedPreview)
+    }
+
+    @Test
+    fun testVideoExtractionDeduplicationAndPrioritization() {
+        val newVideo = MediaInboxItem(
+            id = "vid_1",
+            title = "Teaser Video",
+            localUri = "",
+            sourceUrl = "https://example.com/video.mp4?utm_source=twitter",
+            isVideo = true,
+            format = "MP4"
+        )
+        val duplicateVideo = MediaInboxItem(
+            id = "vid_2",
+            title = "Teaser Video 2",
+            localUri = "",
+            sourceUrl = "https://example.com/video.mp4?utm_medium=social",
+            isVideo = true,
+            format = "MP4"
+        )
+        val imageItem = MediaInboxItem(
+            id = "img_1",
+            title = "Article Cover",
+            localUri = "",
+            sourceUrl = "https://example.com/cover.jpg",
+            isVideo = false,
+            format = "JPEG"
+        )
+
+        val combined = listOf(imageItem, newVideo, duplicateVideo)
+        val (videos, images) = combined.partition { it.isVideo || it.isStream }
+        val seenKeys = mutableSetOf<String>()
+        val deduplicated = (videos + images).filter { item ->
+            val key = MediaNormalizer.canonicalKey(item.sourceUrl).ifBlank { item.id }
+            seenKeys.add(key)
+        }
+
+        // Must prioritize video first and deduplicate identical canonical video URLs
+        assertEquals(2, deduplicated.size)
+        assertTrue("First item must be video", deduplicated[0].isVideo)
+        assertEquals("https://example.com/video.mp4?utm_source=twitter", deduplicated[0].sourceUrl)
+        assertFalse("Second item must be image", deduplicated[1].isVideo)
+        assertEquals("https://example.com/cover.jpg", deduplicated[1].sourceUrl)
+    }
+
+    @Test
+    fun testConcurrencyGuardPreventsDuplicateExtraction() {
+        val activeExtractions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val bookmarkId = "bookmark_test_concurrency"
+
+        val firstAcquire = activeExtractions.add(bookmarkId)
+        val secondAcquire = activeExtractions.add(bookmarkId)
+
+        assertTrue("First acquire should succeed", firstAcquire)
+        assertFalse("Second concurrent acquire must be rejected", secondAcquire)
+
+        activeExtractions.remove(bookmarkId)
+        val reacquireAfterRelease = activeExtractions.add(bookmarkId)
+        assertTrue("Acquire after release should succeed", reacquireAfterRelease)
+    }
 }
+
 

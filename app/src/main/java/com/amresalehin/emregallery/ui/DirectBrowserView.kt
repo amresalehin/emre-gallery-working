@@ -101,10 +101,9 @@ fun DirectBrowserView(
     }
 
     var currentUrl by remember { mutableStateOf(startUrl) }
-    val totalDetectedCount = if (currentUrl.isBlank() || currentUrl == "about:blank") {
-        0
-    } else {
-        maxOf(tabDetectedCount, sessionDiscoveredItems.size)
+    val totalDetectedCount = remember(currentUrl, tabDetectedCount, sessionDiscoveredItems.size) {
+        if (currentUrl.isBlank() || currentUrl == "about:blank") 0
+        else maxOf(tabDetectedCount, sessionDiscoveredItems.size)
     }
     var addressInput by remember { mutableStateOf(startUrl) }
     var pageTitle by remember { mutableStateOf("") }
@@ -207,27 +206,47 @@ fun DirectBrowserView(
         }
     }
 
-    // Intercept back button when browser can navigate back, or return to home
-    BackHandler(enabled = canGoBack || currentUrl.isNotBlank() || onClose != null) {
+    fun returnToBrowserHome() {
+        currentUrl = ""
+        addressInput = ""
+        pageTitle = ""
+        canGoBack = false
+        canGoForward = false
+        onUrlChange?.invoke("")
+        tabSession.clearMedia()
+        tabSession.updateNavigation("")
+        DownloaderSession.clear()
+        scrollHandler.show()
+        webViewInstance?.clearHistory()
+        webViewInstance?.loadUrl("about:blank")
+    }
+
+    // Synchronized back navigation for DirectBrowserView (shared by native BackHandler and search bar back button)
+    fun handleBrowserBackNavigation() {
         when {
             showHistorySheet -> showHistorySheet = false
             showTabsSheet -> showTabsSheet = false
             showSettingsSheet -> showSettingsSheet = false
             showAddShortcutDialog -> showAddShortcutDialog = false
             selectedShortcutForEdit != null -> selectedShortcutForEdit = null
-            canGoBack && webViewInstance?.canGoBack() == true -> webViewInstance?.goBack()
             currentUrl.isNotBlank() -> {
-                currentUrl = ""
-                addressInput = ""
-                pageTitle = ""
-                onUrlChange?.invoke("")
-                tabSession.clearMedia()
-                tabSession.updateNavigation("")
-                DownloaderSession.clear()
-                webViewInstance?.loadUrl("about:blank")
+                if (canGoBack && webViewInstance?.canGoBack() == true) {
+                    webViewInstance?.goBack()
+                } else {
+                    returnToBrowserHome()
+                }
             }
             onClose != null -> onClose()
         }
+    }
+
+    // Intercept back button when browser can navigate back, return to home, dismiss a sheet, or exit the browser
+    BackHandler(
+        enabled = showHistorySheet || showTabsSheet || showSettingsSheet ||
+                showAddShortcutDialog || selectedShortcutForEdit != null ||
+                currentUrl.isNotBlank() || onClose != null
+    ) {
+        handleBrowserBackNavigation()
     }
 
     fun navigateToUrl(target: String) {
@@ -412,17 +431,19 @@ fun DirectBrowserView(
                 },
                 isWebPage = currentUrl.isNotBlank(),
                 onHomeClick = {
-                    currentUrl = ""
-                    addressInput = ""
-                    pageTitle = ""
-                    onUrlChange?.invoke("")
-                    tabSession.clearMedia()
-                    tabSession.updateNavigation("")
-                    DownloaderSession.clear()
-                    scrollHandler.show()
-                    webViewInstance?.loadUrl("about:blank")
+                    handleBrowserBackNavigation()
                 },
                 onCloseBrowser = onClose,
+                tabCount = tabsList.size,
+                onOpenDownloads = {
+                    onOpenDownloads?.invoke() ?: onSwitchToMediaTab()
+                },
+                onOpenHistory = {
+                    showHistorySheet = true
+                },
+                onOpenTabs = {
+                    showTabsSheet = true
+                },
                 isDark = isDark,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -504,54 +525,6 @@ fun DirectBrowserView(
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                 settings.forceDark = if (isDark) WebSettings.FORCE_DARK_ON else WebSettings.FORCE_DARK_OFF
                             }
-
-                            var startTouchY = 0f
-                            var startTouchX = 0f
-                            var accumulatedTouchDy = 0f
-
-                            setOnTouchListener { _, event ->
-                                when (event.actionMasked) {
-                                    MotionEvent.ACTION_DOWN -> {
-                                        startTouchY = event.rawY
-                                        startTouchX = event.rawX
-                                        accumulatedTouchDy = 0f
-                                    }
-                                    MotionEvent.ACTION_MOVE -> {
-                                        val dy = startTouchY - event.rawY
-                                        val dx = startTouchX - event.rawX
-                                        startTouchY = event.rawY
-                                        startTouchX = event.rawX
-
-                                        if (kotlin.math.abs(dy) > kotlin.math.abs(dx)) {
-                                            if (dy > 0f) {
-                                                if (accumulatedTouchDy < 0f) accumulatedTouchDy = 0f
-                                                accumulatedTouchDy += dy
-                                                if (accumulatedTouchDy >= scrollHandler.thresholdPx) {
-                                                    scrollHandler.hide()
-                                                }
-                                            } else if (dy < 0f) {
-                                                if (accumulatedTouchDy > 0f) accumulatedTouchDy = 0f
-                                                accumulatedTouchDy += dy
-                                                if (accumulatedTouchDy <= -scrollHandler.thresholdPx) {
-                                                    scrollHandler.show()
-                                                }
-                                            }
-                                        }
-                                    }
-                                    MotionEvent.ACTION_UP,
-                                    MotionEvent.ACTION_CANCEL -> {
-                                        accumulatedTouchDy = 0f
-                                        scrollHandler.onTouchEnd()
-                                    }
-                                }
-                                false
-                            }
-
-                            setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
-                                val dy = scrollY - oldScrollY
-                                scrollHandler.onScroll(scrollY, dy)
-                            }
-
                             settings.apply {
                                 javaScriptEnabled = true
                                 domStorageEnabled = true
@@ -577,8 +550,6 @@ fun DirectBrowserView(
                                     )
                                     if (item != null) {
                                         tabSession.registerMedia(item)
-                                        onMediaExtracted(item)
-                                        DownloaderSession.addDiscoveredItem(item)
                                     }
                                 },
                                 "EmreBridge"
@@ -756,8 +727,6 @@ fun DirectBrowserView(
                                         baseUrl = currentUrl
                                     ) { item ->
                                         tabSession.registerMedia(item)
-                                        DownloaderSession.addDiscoveredItem(item)
-                                        onMediaExtracted(item)
                                     }
                                 }
                             }
@@ -801,47 +770,6 @@ fun DirectBrowserView(
                         modifier = Modifier
                             .fillMaxSize()
                             .testTag("browser_empty_home_page")
-                    )
-                }
-
-                // 3. Floating Bottom Action Bar with auto-hide slide-and-fade animation
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = scrollHandler.isVisible,
-                    enter = slideInVertically(
-                        initialOffsetY = { fullHeight -> fullHeight },
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMediumLow
-                        )
-                    ) + fadeIn(animationSpec = tween(durationMillis = 200)),
-                    exit = slideOutVertically(
-                        targetOffsetY = { fullHeight -> fullHeight },
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMediumLow
-                        )
-                    ) + fadeOut(animationSpec = tween(durationMillis = 200)),
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .wrapContentHeight()
-                ) {
-                    BrowserBottomNavBar(
-                        tabCount = tabsList.size,
-                        onOpenDownloads = {
-                            onOpenDownloads?.invoke() ?: onSwitchToMediaTab()
-                        },
-                        onOpenHistory = {
-                            showHistorySheet = true
-                        },
-                        onOpenTabs = {
-                            showTabsSheet = true
-                        },
-                        onOpenBrowserSettings = {
-                            showSettingsSheet = true
-                        },
-                        isDark = isDark,
-                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }

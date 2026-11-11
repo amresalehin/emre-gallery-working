@@ -112,6 +112,17 @@ object DownloaderSession {
         synchronized(itemsLock) {
             val updated = MediaNormalizer.mergeCandidates(canonicalMap, newItems)
             if (updated) {
+                // Keep discovered list bounded to prevent memory leaks on endless browsing
+                if (canonicalMap.size > 250) {
+                    val excess = canonicalMap.size - 250
+                    val it = canonicalMap.iterator()
+                    var removed = 0
+                    while (it.hasNext() && removed < excess) {
+                        it.next()
+                        it.remove()
+                        removed++
+                    }
+                }
                 val sorted = canonicalMap.values.toList()
                 _discoveredItems.value = sorted
                 // Auto-select all items by default if user hasn't explicitly customized selection

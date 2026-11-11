@@ -482,13 +482,18 @@ object LinkMetadataFetcher {
                 ?: resolved.substringAfterLast('/').substringBefore('?').takeIf { it.isNotBlank() && it.length > 2 }
                 ?: defaultTitle.ifBlank { "Media ${items.size + 1}" }
 
+            val isActualVideo = isVideo || lower.endsWith(".mp4") || lower.endsWith(".webm") ||
+                    lower.endsWith(".m3u8") || lower.endsWith(".mov") || lower.contains("/videoplayback") ||
+                    lower.contains(".mp4?") || lower.contains(".webm?") || lower.contains(".m3u8?")
+
             val format = when {
-                isVideo -> "MP4"
+                lower.endsWith(".webm") || lower.contains(".webm?") -> "WEBM"
+                lower.endsWith(".m3u8") || lower.contains(".m3u8?") -> "M3U8"
+                isActualVideo || lower.endsWith(".mp4") -> "MP4"
                 lower.endsWith(".png") -> "PNG"
                 lower.endsWith(".gif") -> "GIF"
                 lower.endsWith(".webp") -> "WEBP"
                 lower.endsWith(".svg") -> "SVG"
-                lower.endsWith(".mp4") -> "MP4"
                 else -> "JPEG"
             }
 
@@ -498,7 +503,7 @@ object LinkMetadataFetcher {
                     title = cleanTitle,
                     localUri = "",
                     sourceUrl = resolved,
-                    isVideo = isVideo,
+                    isVideo = isActualVideo,
                     format = format,
                     dateAddedMillis = System.currentTimeMillis()
                 )
@@ -525,15 +530,31 @@ object LinkMetadataFetcher {
             addCandidate(u, defaultTitle)
         }
 
-        // 4. Videos & Posters
+        // 4. Videos & Posters (OpenGraph, Twitter video, and HTML5 video tags)
+        doc.select("meta[property='og:video'], meta[property='og:video:url'], meta[property='og:video:secure_url'], meta[name='twitter:player:stream']").forEach {
+            val u = it.absUrl("content").ifBlank { it.attr("content") }
+            if (u.isNotBlank()) addCandidate(u, defaultTitle.ifBlank { "Video" }, isVideo = true)
+        }
         doc.select("video").forEach { vid ->
             val poster = vid.absUrl("poster").ifBlank { vid.attr("poster") }
             if (poster.isNotBlank()) addCandidate(poster, "Video Poster", isVideo = false)
             val src = vid.absUrl("src").ifBlank { vid.attr("src") }
+                .ifBlank { vid.absUrl("data-src").ifBlank { vid.attr("data-src") } }
+                .ifBlank { vid.absUrl("data-video-src").ifBlank { vid.attr("data-video-src") } }
             if (src.isNotBlank()) addCandidate(src, "Video", isVideo = true)
             vid.select("source").forEach { s ->
                 val sSrc = s.absUrl("src").ifBlank { s.attr("src") }
+                    .ifBlank { s.absUrl("data-src").ifBlank { s.attr("data-src") } }
                 if (sSrc.isNotBlank()) addCandidate(sSrc, "Video Stream", isVideo = true)
+            }
+        }
+        // Direct video anchor links or data-video containers
+        doc.select("a[href*='.mp4'], a[href*='.webm'], a[href*='.m3u8'], [data-video-url]").forEach { el ->
+            val vUrl = el.absUrl("data-video-url").ifBlank { el.attr("data-video-url") }
+                .ifBlank { el.absUrl("href").ifBlank { el.attr("href") } }
+            if (vUrl.isNotBlank()) {
+                val label = el.text().trim().takeIf { it.isNotBlank() && it.length <= 40 } ?: "Video"
+                addCandidate(vUrl, label, isVideo = true)
             }
         }
 

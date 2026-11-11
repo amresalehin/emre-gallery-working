@@ -20,13 +20,11 @@ class GalleryApplication : Application() {
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
         val isLowRam = activityManager?.isLowRamDevice ?: false
 
-        // Unconstrained memory caching: Allocate up to 45% (30% on low-RAM) of JVM heap to Coil.
-        // With largeHeap enabled, this unlocks hundreds of megabytes for raw pre-decoded bitmaps,
-        // avoiding recurring decompression bottlenecks during 120Hz continuous scrolling.
-        val cachePercent = if (isLowRam) 0.30 else 0.45
+        // Balanced memory caching: Allocate up to 20% (15% on low-RAM) of JVM heap to Coil,
+        // allowing the WebView process and native Chromium buffers ample memory headroom.
+        val cachePercent = if (isLowRam) 0.15 else 0.20
 
-        // Unconstrained concurrency: Utilize full Dispatchers without artificial core-capping
-        // so that multi-core processors decode thumbnails at maximum throughput.
+        // Utilize background dispatchers for decoding
         val imageIoDispatcher = Dispatchers.IO
         val imageComputeDispatcher = Dispatchers.Default
 
@@ -37,7 +35,7 @@ class GalleryApplication : Application() {
             .memoryCache {
                 MemoryCache.Builder(this)
                     .maxSizePercent(cachePercent)
-                    .strongReferencesEnabled(true)
+                    .strongReferencesEnabled(false) // Allows garbage collector to reclaim cache during high RAM pressure
                     .build()
             }
             .diskCache {
