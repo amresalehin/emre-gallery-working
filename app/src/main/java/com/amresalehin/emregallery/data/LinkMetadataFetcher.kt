@@ -100,7 +100,7 @@ object LinkMetadataFetcher {
         }
 
         try {
-            val response = OkHttpDownloader.getHtml(normalizedUrl, maxBytes = 2 * 1024 * 1024)
+            val response = OkHttpDownloader.getHtml(normalizedUrl, maxBytes = 8 * 1024 * 1024L)
             val finalUrl = response.finalUrl.ifBlank { normalizedUrl }
             val finalDomain = MediaClassifier.cleanDomainFromUrl(finalUrl).ifBlank { domain }
 
@@ -340,6 +340,18 @@ object LinkMetadataFetcher {
      * and all discovered site media items.
      * Pure and isolated for reliable testing.
      */
+    fun parseSrcsetUrls(srcset: String): List<String> {
+        if (srcset.isBlank()) return emptyList()
+        return srcset.split(",")
+            .map { it.trim().split("\\s+".toRegex()).firstOrNull() ?: "" }
+            .filter { it.isNotBlank() }
+    }
+
+    /**
+     * Parses raw HTML string and extracts OpenGraph, Twitter, JSON-LD, document metadata,
+     * and all discovered site media items with full <base href> resolution.
+     * Pure and isolated for reliable testing.
+     */
     fun parseHtml(html: String, targetUrl: String): LinkMetadata {
         val domain = MediaClassifier.cleanDomainFromUrl(targetUrl)
         val defaultFavicon = if (domain.isNotBlank()) {
@@ -347,6 +359,16 @@ object LinkMetadataFetcher {
         } else ""
 
         val doc: Document = Jsoup.parse(html, targetUrl)
+
+        // Resolve against <base href> and the redirect URL
+        val baseTagHref = doc.selectFirst("base[href]")?.attr("href")?.trim()
+        val effectiveBaseUrl = if (!baseTagHref.isNullOrBlank()) {
+            resolveAbsoluteUrl(targetUrl, baseTagHref)
+        } else {
+            targetUrl
+        }
+        doc.setBaseUri(effectiveBaseUrl)
+
         val jsonLd = parseJsonLd(doc)
 
         // 1. Title Extraction
@@ -361,8 +383,8 @@ object LinkMetadataFetcher {
 
         val candidateTitle = sequenceOf(ogTitle, twitterTitle, jsonLd.title.takeIf { it.isNotBlank() }, docTitle, metaTitle, itempropName, h1Title)
             .mapNotNull { it?.trim() }
-            .firstOrNull { it.isNotBlank() && !BotDetectionMitigator.isBotChallenge(it, targetUrl) }
-            ?: domain.ifBlank { targetUrl }
+            .firstOrNull { it.isNotBlank() && !BotDetectionMitigator.isBotChallenge(it, effectiveBaseUrl) }
+            ?: domain.ifBlank { effectiveBaseUrl }
 
         val cleanTitle = cleanText(candidateTitle)
 
@@ -419,7 +441,7 @@ object LinkMetadataFetcher {
             hiResIcon
         ).firstOrNull { !it.isNullOrBlank() } ?: ""
 
-        val rawResolvedPreview = resolveAbsoluteUrl(targetUrl, candidateImage)
+        val rawResolvedPreview = resolveAbsoluteUrl(effectiveBaseUrl, candidateImage)
         val previewImageUrl = if (rawResolvedPreview.isNotBlank()) {
             rawResolvedPreview
         } else if (domain.isNotBlank()) {
@@ -431,14 +453,14 @@ object LinkMetadataFetcher {
             ?: doc.selectFirst("link[rel='icon']")
             ?: doc.selectFirst("link[rel~=(?i)icon]")
         val extractedFavicon = faviconEl?.let { extractAbsUrl(it, "href") } ?: ""
-        val resolvedFavicon = resolveAbsoluteUrl(targetUrl, extractedFavicon)
+        val resolvedFavicon = resolveAbsoluteUrl(effectiveBaseUrl, extractedFavicon)
         val finalFavicon = if (resolvedFavicon.isNotBlank()) resolvedFavicon else defaultFavicon
 
         // 6. Extract all media items of the site
-        val mediaItems = extractSiteMedia(doc, targetUrl, cleanTitle, previewImageUrl, jsonLd.imageUrl)
+        val mediaItems = extractSiteMedia(doc, effectiveBaseUrl, cleanTitle, previewImageUrl, jsonLd.imageUrl)
 
         return LinkMetadata(
-            url = targetUrl,
+            url = effectiveBaseUrl,
             title = cleanTitle,
             description = cleanDesc,
             previewImageUrl = previewImageUrl,
@@ -450,7 +472,9 @@ object LinkMetadataFetcher {
     }
 
     /**
-     * Extracts all media items (images, photos, video posters) present across the site/document.
+     * Extracts all media items (images, photos, videos, streams) present across the site/document.
+     * Parses <picture>, srcset, data-lazy-src, data-original, <noscript>, <script> JSON-LD / __NEXT_DATA__,
+     * background-image styles, and expands .m3u8 playlists.
      */
     fun extractSiteMedia(
         doc: Document,
@@ -469,7 +493,7 @@ object LinkMetadataFetcher {
             if (seenUrls.contains(resolved)) return
 
             // Filter out tracking pixels, spacers, transparent gifs, tiny badges
-            val lower = resolved.lowercase()
+            val lower = resolved.lowercase(Locale.ROOT)
             if (lower.contains("1x1") || lower.contains("spacer") || lower.contains("tracking") ||
                 lower.contains("pixel.gif") || lower.contains("beacon") || lower.contains("empty.png") ||
                 lower.contains("magnifying-glass") || lower.contains("close-icon")
@@ -482,13 +506,14 @@ object LinkMetadataFetcher {
                 ?: resolved.substringAfterLast('/').substringBefore('?').takeIf { it.isNotBlank() && it.length > 2 }
                 ?: defaultTitle.ifBlank { "Media ${items.size + 1}" }
 
-            val isActualVideo = isVideo || lower.endsWith(".mp4") || lower.endsWith(".webm") ||
-                    lower.endsWith(".m3u8") || lower.endsWith(".mov") || lower.contains("/videoplayback") ||
-                    lower.contains(".mp4?") || lower.contains(".webm?") || lower.contains(".m3u8?")
+            val isM3u8 = lower.endsWith(".m3u8") || lower.contains(".m3u8?")
+            val isActualVideo = isVideo || isM3u8 || lower.endsWith(".mp4") || lower.endsWith(".webm") ||
+                    lower.endsWith(".mov") || lower.contains("/videoplayback") ||
+                    lower.contains(".mp4?") || lower.contains(".webm?")
 
             val format = when {
+                isM3u8 -> "M3U8"
                 lower.endsWith(".webm") || lower.contains(".webm?") -> "WEBM"
-                lower.endsWith(".m3u8") || lower.contains(".m3u8?") -> "M3U8"
                 isActualVideo || lower.endsWith(".mp4") -> "MP4"
                 lower.endsWith(".png") -> "PNG"
                 lower.endsWith(".gif") -> "GIF"
@@ -504,10 +529,34 @@ object LinkMetadataFetcher {
                     localUri = "",
                     sourceUrl = resolved,
                     isVideo = isActualVideo,
+                    isStream = isM3u8,
                     format = format,
                     dateAddedMillis = System.currentTimeMillis()
                 )
             )
+        }
+
+        fun processImageElement(img: org.jsoup.nodes.Element, defaultAlt: String) {
+            val alt = img.attr("alt").ifBlank { img.attr("title") }.ifBlank { defaultAlt }
+            // 1. srcset and data-srcset
+            val srcset = img.attr("srcset").ifBlank { img.attr("data-srcset") }
+            if (srcset.isNotBlank()) {
+                parseSrcsetUrls(srcset).forEach { candidate ->
+                    addCandidate(candidate, alt)
+                }
+            }
+            // 2. High-res and lazy attributes
+            val lazyAttrs = listOf(
+                "data-hi-res-src", "data-large-file", "data-original",
+                "data-src", "data-lazy-src", "data-zoom-src", "data-full-src",
+                "data-url", "src"
+            )
+            for (attr in lazyAttrs) {
+                val u = img.attr(attr).trim()
+                if (u.isNotBlank()) {
+                    addCandidate(u, alt)
+                }
+            }
         }
 
         // 1. Primary preview image always gets position 1 in the deck
@@ -558,41 +607,115 @@ object LinkMetadataFetcher {
             }
         }
 
-        // 5. Content Images (articles, main content, figures, galleries, Next.js pictures, body images)
-        val imageElements = doc.select("article img, main img, #content img, .content img, .post-content img, .entry-content img, figure img, picture source, .gallery img, img")
-        for (img in imageElements) {
-            // Check srcset for highest resolution candidate
-            val srcset = img.attr("srcset").ifBlank { img.attr("data-srcset") }
-            if (srcset.isNotBlank()) {
-                val candidate = srcset.split(",")
-                    .map { it.trim().split("\\s+".toRegex()).firstOrNull() ?: "" }
-                    .lastOrNull { it.isNotBlank() }
-                if (!candidate.isNullOrBlank()) {
-                    val alt = img.attr("alt").ifBlank { img.attr("title") }
-                    addCandidate(candidate, alt)
-                }
+        // 5. <picture> elements and source tags
+        doc.select("picture").forEach { pic ->
+            pic.select("source").forEach { s ->
+                val sSrcset = s.attr("srcset").ifBlank { s.attr("data-srcset") }
+                parseSrcsetUrls(sSrcset).forEach { u -> addCandidate(u, "Picture Source") }
+                val src = s.attr("src").ifBlank { s.attr("data-src") }
+                if (src.isNotBlank()) addCandidate(src, "Picture Source")
             }
-
-            // Check high-res and lazy attributes
-            val srcCandidate = img.attr("data-hi-res-src")
-                .ifBlank { img.attr("data-large-file") }
-                .ifBlank { img.attr("data-original") }
-                .ifBlank { img.attr("data-src") }
-                .ifBlank { img.attr("data-lazy-src") }
-                .ifBlank { img.attr("src") }
-
-            val alt = img.attr("alt").ifBlank { img.attr("title") }
-            addCandidate(srcCandidate, alt)
-
-            if (items.size >= 40) break // limit to top 40 for optimal performance
+            pic.select("img").forEach { img ->
+                processImageElement(img, "Picture Image")
+            }
         }
 
-        // 6. Guarantee at least one valid media item if preview URL is available
+        // 6. Content Images (articles, main content, figures, galleries, Next.js pictures, body images)
+        val imageElements = doc.select("article img, main img, #content img, .content img, .post-content img, .entry-content img, figure img, .gallery img, img")
+        for (img in imageElements) {
+            processImageElement(img, defaultTitle)
+            if (items.size >= 80) break
+        }
+
+        // 7. <noscript> tags (extracts images and media rendered for non-JS / SSR)
+        doc.select("noscript").forEach { ns ->
+            val nsHtml = ns.html()
+            if (nsHtml.contains("<img", ignoreCase = true) || nsHtml.contains("<picture", ignoreCase = true) || nsHtml.contains("<video", ignoreCase = true)) {
+                runCatching {
+                    val nsDoc = Jsoup.parseBodyFragment(nsHtml, baseUrl)
+                    nsDoc.select("img").forEach { processImageElement(it, "Noscript Image") }
+                    nsDoc.select("video").forEach { vid ->
+                        val vSrc = vid.absUrl("src").ifBlank { vid.attr("src") }.ifBlank { vid.attr("data-src") }
+                        if (vSrc.isNotBlank()) addCandidate(vSrc, "Noscript Video", isVideo = true)
+                        vid.select("source").forEach { s ->
+                            val sSrc = s.absUrl("src").ifBlank { s.attr("src") }.ifBlank { s.attr("data-src") }
+                            if (sSrc.isNotBlank()) addCandidate(sSrc, "Noscript Video Stream", isVideo = true)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 8. Regex-scan <script>, JSON-LD, and __NEXT_DATA__ with \/ unescape
+        doc.select("script").forEach { script ->
+            val raw = script.data().ifBlank { script.html() }
+            if (raw.isNotBlank() && (raw.contains("http", ignoreCase = true) || raw.contains("\\/\\/"))) {
+                val unescaped = raw.replace("\\/", "/").replace("\\u0026", "&")
+                val mediaPattern = Regex("""(?:https?:)?//[^\s"'<>\\]+?\.(?:jpe?g|png|webp|avif|mp4|webm|m3u8)(?:\?[^\s"'<>\\]+?)?""", RegexOption.IGNORE_CASE)
+                mediaPattern.findAll(unescaped).forEach { m ->
+                    val clean = m.value.trimEnd('.', ',', ';', '\\', ')', '"', '\'', '}')
+                    addCandidate(clean, "Script Asset")
+                }
+            }
+        }
+
+        // 9. Pull background-image URLs from inline styles and <style> stylesheets
+        val cssUrlRegex = Regex("""url\(\s*['"]?([^'")]+)['"]?\s*\)""", RegexOption.IGNORE_CASE)
+        doc.select("[style*='url('], [style*='background']").forEach { el ->
+            cssUrlRegex.findAll(el.attr("style")).forEach { m ->
+                val bgUrl = m.groupValues[1].trim()
+                if (!bgUrl.startsWith("data:", ignoreCase = true)) {
+                    addCandidate(bgUrl, "Background Image")
+                }
+            }
+        }
+        doc.select("style").forEach { styleEl ->
+            val css = styleEl.data().ifBlank { styleEl.html() }
+            cssUrlRegex.findAll(css).forEach { m ->
+                val bgUrl = m.groupValues[1].trim()
+                if (!bgUrl.startsWith("data:", ignoreCase = true) &&
+                    (bgUrl.contains(".jpg", ignoreCase = true) || bgUrl.contains(".jpeg", ignoreCase = true) ||
+                     bgUrl.contains(".png", ignoreCase = true) || bgUrl.contains(".webp", ignoreCase = true) ||
+                     bgUrl.contains(".avif", ignoreCase = true) || bgUrl.contains(".mp4", ignoreCase = true) ||
+                     bgUrl.contains(".m3u8", ignoreCase = true))
+                ) {
+                    addCandidate(bgUrl, "Style Media")
+                }
+            }
+        }
+
+        // 10. Guarantee at least one valid media item if preview URL is available
         if (items.isEmpty() && primaryPreviewUrl.isNotBlank()) {
             addCandidate(primaryPreviewUrl, defaultTitle)
         }
 
         return items
+    }
+
+    /**
+     * Expands an HLS .m3u8 playlist to discover multi-bitrate/resolution variants.
+     */
+    suspend fun expandM3u8Playlist(m3u8Url: String): List<String> = withContext(Dispatchers.IO) {
+        try {
+            val res = OkHttpDownloader.getHtml(m3u8Url, maxBytes = 512 * 1024L)
+            if (res.isSuccessful && !res.bodyString.isNullOrBlank() && res.bodyString.contains("#EXTM3U")) {
+                val variants = mutableListOf<String>()
+                val lines = res.bodyString.lines()
+                var isStreamInf = false
+                for (line in lines) {
+                    val trimmed = line.trim()
+                    if (trimmed.startsWith("#EXT-X-STREAM-INF:")) {
+                        isStreamInf = true
+                    } else if (isStreamInf && trimmed.isNotBlank() && !trimmed.startsWith("#")) {
+                        val resolved = resolveAbsoluteUrl(res.finalUrl.ifBlank { m3u8Url }, trimmed)
+                        if (resolved.isNotBlank()) variants.add(resolved)
+                        isStreamInf = false
+                    }
+                }
+                if (variants.isNotEmpty()) return@withContext variants
+            }
+        } catch (_: Exception) {}
+        listOf(m3u8Url)
     }
 
     private fun extractAbsUrl(element: org.jsoup.nodes.Element, attributeKey: String): String {
@@ -610,7 +733,7 @@ object LinkMetadataFetcher {
             .trim()
     }
 
-    private fun resolveAbsoluteUrl(baseUrl: String, candidate: String): String {
+    fun resolveAbsoluteUrl(baseUrl: String, candidate: String): String {
         if (candidate.isBlank()) return ""
         val unescaped = Parser.unescapeEntities(candidate.trim(), false).trim()
         val trimmed = unescaped

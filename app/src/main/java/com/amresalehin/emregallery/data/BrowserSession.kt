@@ -338,6 +338,15 @@ object BrowserSession {
                             }, 2400L)
                         }
                     }
+
+                    override fun onRenderProcessGone(
+                        view: WebView?,
+                        detail: RenderProcessGoneDetail?
+                    ): Boolean {
+                        Log.w("BrowserSession", "Browser session renderer process gone. Cleaning up.")
+                        finish(if (seenMap.isEmpty()) "Renderer crashed" else null)
+                        return true
+                    }
                 }
 
                 // Allow time for SPA hydration, lazy loading, and the final DOM scan.
@@ -498,6 +507,15 @@ object BrowserSession {
                                 }, 1200L)
                             }
                         }
+                    }
+
+                    override fun onRenderProcessGone(
+                        view: WebView?,
+                        detail: RenderProcessGoneDetail?
+                    ): Boolean {
+                        Log.w("BrowserSession", "Cookie session renderer process gone. Disposing.")
+                        finish(requiresSignIn = false, signInUrl = null)
+                        return true
                     }
                 }
 

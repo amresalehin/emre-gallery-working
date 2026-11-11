@@ -33,6 +33,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem as ExoMediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -178,6 +179,11 @@ fun rememberViewerVideoState(
                     state.durationMs = player?.duration?.takeIf { it > 0L } ?: 0L
                 }
             }
+
+            override fun onPlayerError(error: PlaybackException) {
+                android.util.Log.w("ViewerVideoPlayer", "Playback error encountered: ${error.message}. Retrying prepare.")
+                player?.prepare()
+            }
         }
         player?.addListener(listener)
         onDispose {
@@ -187,11 +193,14 @@ fun rememberViewerVideoState(
         }
     }
 
-    // Pause player when activity/lifecycle moves to background
+    // Release/pause player when activity/lifecycle moves to background
     DisposableEffect(lifecycleOwner, player) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) {
-                player?.pause()
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> player?.pause()
+                Lifecycle.Event.ON_STOP -> player?.stop()
+                Lifecycle.Event.ON_RESUME -> if (sessionPlayIntent) player?.play()
+                else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

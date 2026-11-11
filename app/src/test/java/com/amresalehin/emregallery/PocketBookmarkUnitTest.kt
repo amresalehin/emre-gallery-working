@@ -1,12 +1,15 @@
 package com.amresalehin.emregallery
 
+import com.amresalehin.emregallery.data.LinkMetadataFetcher
 import com.amresalehin.emregallery.data.MediaClassifier
 import com.amresalehin.emregallery.data.MediaInboxItem
 import com.amresalehin.emregallery.data.MediaInboxStack
+import com.amresalehin.emregallery.data.MediaNormalizer
 import com.amresalehin.emregallery.data.PocketRepository
 import com.amresalehin.emregallery.ui.Destination
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -947,6 +950,166 @@ class PocketBookmarkUnitTest {
         activeExtractions.remove(bookmarkId)
         val reacquireAfterRelease = activeExtractions.add(bookmarkId)
         assertTrue("Acquire after release should succeed", reacquireAfterRelease)
+    }
+
+    @Test
+    fun testComprehensiveStaticHtmlExtraction() {
+        val html = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <base href="https://cdn.example.com/subfolder/">
+                <meta property="og:title" content="Enhanced Web Article">
+                <style>
+                    .hero-banner { background-image: url('assets/hero_bg.jpg'); }
+                </style>
+                <script id="__NEXT_DATA__" type="application/json">
+                    {"props":{"pageProps":{"storyVideo":"https:\/\/cdn.example.com\/subfolder\/media\/teaser.mp4?source=nextjs","storyPhoto":"https:\/\/cdn.example.com\/subfolder\/images\/photo_next.jpg"}}}
+                </script>
+            </head>
+            <body>
+                <div style="background: url('images/inline_bg.png') center;">
+                    <h1>Main Heading</h1>
+                </div>
+                <picture>
+                    <source srcset="images/pic_1200.webp 1200w, images/pic_600.webp 600w" type="image/webp">
+                    <img src="images/pic_fallback.jpg" alt="Picture Alt">
+                </picture>
+                <noscript>
+                    <img src="images/noscript_fallback.png" alt="Noscript Graphic">
+                    <video src="media/noscript_stream.m3u8"></video>
+                </noscript>
+                <img data-lazy-src="images/lazy_large.jpg" data-original="images/original_master.jpg" src="images/tiny_placeholder.jpg" alt="Lazy Content">
+                <a href="media/direct_clip.mp4">Watch Video</a>
+            </body>
+            </html>
+        """.trimIndent()
+
+        val metadata = LinkMetadataFetcher.parseHtml(html, "https://example.com/news/article.html")
+
+        // 1. Title resolved
+        assertEquals("Enhanced Web Article", metadata.title)
+
+        // 2. Base href resolution: relative assets must be resolved against https://cdn.example.com/subfolder/
+        val mediaUrls = metadata.mediaItems.map { it.sourceUrl }
+
+        // <picture> and srcset candidates resolved against base href
+        assertTrue("Must extract webp from picture source with base href", mediaUrls.any { it == "https://cdn.example.com/subfolder/images/pic_1200.webp" })
+        assertTrue("Must extract fallback picture image with base href", mediaUrls.any { it == "https://cdn.example.com/subfolder/images/pic_fallback.jpg" })
+
+        // <noscript> candidates
+        assertTrue("Must extract noscript image", mediaUrls.any { it == "https://cdn.example.com/subfolder/images/noscript_fallback.png" })
+        assertTrue("Must extract noscript m3u8", mediaUrls.any { it == "https://cdn.example.com/subfolder/media/noscript_stream.m3u8" })
+
+        // Stylesheet background-image and inline style background
+        assertTrue("Must extract stylesheet background-image", mediaUrls.any { it == "https://cdn.example.com/subfolder/assets/hero_bg.jpg" })
+        assertTrue("Must extract inline style background-image", mediaUrls.any { it == "https://cdn.example.com/subfolder/images/inline_bg.png" })
+
+        // Script / __NEXT_DATA__ with unescaped \/
+        assertTrue("Must extract unescaped video from NEXT_DATA", mediaUrls.any { it.contains("teaser.mp4") })
+        assertTrue("Must extract unescaped photo from NEXT_DATA", mediaUrls.any { it.contains("photo_next.jpg") })
+
+        // Direct anchor video & lazy attributes
+        assertTrue("Must extract direct anchor video", mediaUrls.any { it.contains("direct_clip.mp4") })
+        assertTrue("Must extract data-lazy-src", mediaUrls.any { it.contains("lazy_large.jpg") })
+    }
+
+    @Test
+    fun testCanonicalKeyTrackingAndCdnGroupingWithOverMergeGuard() {
+        // 1. Strips tracking params and fragments
+        val trackingUrl1 = "https://images.example.com/nature.jpg?utm_source=twitter&utm_medium=cpc&w=800#preview"
+        val trackingUrl2 = "https://images.example.com/nature.jpg?fbclid=12345&gclid=67890&w=1600#section2"
+        val key1 = MediaNormalizer.canonicalKey(trackingUrl1)
+        val key2 = MediaNormalizer.canonicalKey(trackingUrl2)
+
+        // Both CDN size variants of the same base image map to the same canonical key
+        assertEquals("CDN size variants of the same image must produce the same canonical key", key1, key2)
+        assertFalse(key1.contains("utm_source"))
+        assertFalse(key1.contains("fbclid"))
+        assertFalse(key1.contains("#"))
+
+        // 2. Over-merging guard: different IDs on generic endpoints MUST NOT merge
+        val dynamicImg1 = "https://example.com/api/get_photo?id=42&w=800"
+        val dynamicImg2 = "https://example.com/api/get_photo?id=99&w=800"
+        val keyDyn1 = MediaNormalizer.canonicalKey(dynamicImg1)
+        val keyDyn2 = MediaNormalizer.canonicalKey(dynamicImg2)
+        assertNotEquals("Distinct IDs on dynamic endpoints must not over-merge", keyDyn1, keyDyn2)
+        assertTrue(keyDyn1.contains("id=42"))
+        assertTrue(keyDyn2.contains("id=99"))
+
+        // 3. Group CDN size variants and keep the largest
+        val smallVariant = MediaInboxItem(
+            id = "cdn_small",
+            title = "Nature",
+            localUri = "",
+            sourceUrl = "https://images.example.com/nature.jpg?w=400&h=300",
+            isVideo = false,
+            format = "JPEG",
+            sizeBytes = 50_000L
+        )
+        val mediumVariant = MediaInboxItem(
+            id = "cdn_med",
+            title = "Nature",
+            localUri = "",
+            sourceUrl = "https://images.example.com/nature.jpg?w=800&h=600",
+            isVideo = false,
+            format = "JPEG",
+            sizeBytes = 180_000L
+        )
+        val largestVariant = MediaInboxItem(
+            id = "cdn_large",
+            title = "Nature",
+            localUri = "",
+            sourceUrl = "https://images.example.com/nature.jpg?w=1920&h=1080",
+            isVideo = false,
+            format = "JPEG",
+            sizeBytes = 650_000L
+        )
+
+        val deduplicated = MediaNormalizer.deduplicateMediaInboxItems(listOf(smallVariant, largestVariant, mediumVariant))
+        assertEquals(1, deduplicated.size)
+        assertEquals("Must keep the largest variant among CDN size variants", "cdn_large", deduplicated.first().id)
+        assertEquals("https://images.example.com/nature.jpg?w=1920&h=1080", deduplicated.first().sourceUrl)
+    }
+
+    @Test
+    fun testDeepScanStateManagementAndIncrementalMerging() {
+        val engine = com.amresalehin.emregallery.data.PocketDeepScanEngine
+        assertFalse("Engine should be idle initially", engine.isScanning())
+
+        // Stop on idle engine is a safe no-op
+        engine.stopScan()
+        assertFalse("Engine remains idle after stop", engine.isScanning())
+
+        // Incremental merge test: verify that newly discovered deep scan items merge cleanly with existing items
+        val existingItem = MediaInboxItem(
+            id = "exist_1",
+            title = "Existing Cover",
+            localUri = "",
+            sourceUrl = "https://example.com/cover.jpg",
+            isVideo = false
+        )
+        val deepScannedNew = MediaInboxItem(
+            id = "deep_1",
+            title = "Discovered Dynamic Video",
+            localUri = "",
+            sourceUrl = "https://example.com/feed/stream.m3u8",
+            isVideo = true,
+            isStream = true,
+            format = "M3U8"
+        )
+        val deepScannedDuplicate = MediaInboxItem(
+            id = "deep_2",
+            title = "Duplicate Cover",
+            localUri = "",
+            sourceUrl = "https://example.com/cover.jpg?utm_source=feed",
+            isVideo = false
+        )
+
+        val merged = MediaNormalizer.deduplicateMediaInboxItems(listOf(deepScannedNew, deepScannedDuplicate) + listOf(existingItem))
+        assertEquals("Should contain 2 distinct items (video + cover)", 2, merged.size)
+        assertTrue("Discovered stream should be retained and prioritized", merged.any { it.isStream && it.isVideo })
+        assertTrue("Original cover should be retained without duplication", merged.any { it.sourceUrl.contains("cover.jpg") })
     }
 }
 

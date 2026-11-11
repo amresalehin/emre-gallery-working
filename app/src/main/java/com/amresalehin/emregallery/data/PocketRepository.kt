@@ -780,18 +780,10 @@ class PocketRepository(
                 }
 
                 // Resolve media items: merge new candidates with existing cached items
-                // Prioritize video items, and preserve existing cached items if newCandidates is empty
+                // Groups CDN size variants, selects the largest variant, and prioritizes video streams
                 val resolvedItems = if (newCandidates.isNotEmpty()) {
-                    val seenKeys = mutableSetOf<String>()
                     val combined = newCandidates + current.items
-                    // Partition to prioritize videos while maintaining clean ordering
-                    val (videos, images) = combined.partition { it.isVideo || it.isStream }
-                    (videos + images).filter { item ->
-                        val keySource = item.sourceUrl.ifBlank { item.localUri }
-                        if (keySource.isBlank()) return@filter false
-                        val key = MediaNormalizer.canonicalKey(keySource).ifBlank { item.id }
-                        seenKeys.add(key)
-                    }.take(60)
+                    MediaNormalizer.deduplicateMediaInboxItems(combined).take(60)
                 } else {
                     // Preserve existing cached media if refresh returned empty
                     current.items
@@ -833,6 +825,62 @@ class PocketRepository(
      */
     fun refreshMetadata(bookmarkId: String, extractionContext: Context? = null) {
         fetchSiteMedia(bookmarkId, extractionContext)
+    }
+
+    private val _activeDeepScanId = MutableStateFlow<String?>(null)
+    val activeDeepScanId: StateFlow<String?> = _activeDeepScanId.asStateFlow()
+
+    fun isDeepScanning(bookmarkId: String): Boolean = _activeDeepScanId.value == bookmarkId
+
+    /**
+     * Starts an on-demand hardware-accelerated deep scan for a bookmark.
+     * Capped at 30 seconds with automatic scroll and real-time incremental media discovery.
+     */
+    fun startDeepScan(bookmarkId: String, context: Context) {
+        val target = _bookmarks.value.find { it.id == bookmarkId } ?: return
+        if (target.sourceUrl.isBlank()) return
+
+        _activeDeepScanId.value = bookmarkId
+
+        PocketDeepScanEngine.startScan(
+            context = context,
+            bookmarkId = bookmarkId,
+            targetUrl = target.sourceUrl,
+            scope = coroutineScope,
+            onIncrementalMediaDiscovered = { newCandidates ->
+                val current = _bookmarks.value.find { it.id == bookmarkId } ?: return@startScan
+                val combined = newCandidates + current.items
+                val resolvedItems = MediaNormalizer.deduplicateMediaInboxItems(combined).take(120)
+                val newPreview = if (current.previewImageUrl.isBlank()) {
+                    resolvedItems.firstOrNull { !it.isVideo }?.sourceUrl
+                        ?: resolvedItems.firstOrNull()?.sourceUrl
+                        ?: ""
+                } else current.previewImageUrl
+
+                val updated = current.copy(
+                    items = resolvedItems,
+                    previewImageUrl = newPreview
+                )
+                _bookmarks.value = _bookmarks.value.map { if (it.id == bookmarkId) updated else it }
+            },
+            onCompleted = {
+                if (_activeDeepScanId.value == bookmarkId) {
+                    _activeDeepScanId.value = null
+                }
+                persist()
+            }
+        )
+    }
+
+    /**
+     * Stops the active deep scan immediately and flushes current findings to persistent storage.
+     */
+    fun stopDeepScan(bookmarkId: String) {
+        if (_activeDeepScanId.value == bookmarkId) {
+            PocketDeepScanEngine.stopScan()
+            _activeDeepScanId.value = null
+            persist()
+        }
     }
 
     /**

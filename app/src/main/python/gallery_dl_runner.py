@@ -5,6 +5,21 @@ import traceback
 import hashlib
 import threading
 
+# Android Sandbox Guard: Chaquopy runs in the Android ART process where calling fork()/sigaction
+# via native _posixsubprocess triggers a fatal SIGSEGV (SIG_DFL). Block _posixsubprocess and stub subprocess.
+sys.modules['_posixsubprocess'] = None
+try:
+    import subprocess
+    class _AndroidDisabledPopen:
+        def __init__(self, *args, **kwargs):
+            raise FileNotFoundError("External subprocess is not supported on Android")
+    subprocess.Popen = _AndroidDisabledPopen
+    subprocess.call = lambda *a, **kw: 1
+    subprocess.check_call = lambda *a, **kw: 1
+    subprocess.check_output = lambda *a, **kw: b""
+except Exception:
+    pass
+
 _gdl_lock = threading.Lock()
 
 try:
@@ -538,6 +553,8 @@ def extract_yt_dlp(url, options_json="{}"):
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
+            "ffmpeg_location": None,
+            "prefer_ffmpeg": False,
             "format": "b[vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/bestvideo+bestaudio/best",
             "socket_timeout": 35,
             "geo_bypass": True,
@@ -767,6 +784,8 @@ def _download_with_ytdlp(url, target_path, referer, user_agent, cookies, extra_h
             "outtmpl": target_path,
             "quiet": True,
             "no_warnings": True,
+            "ffmpeg_location": None,
+            "prefer_ffmpeg": False,
             "format": "b[vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/bestvideo+bestaudio/best",
             "socket_timeout": 35,
             "geo_bypass": True,

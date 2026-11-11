@@ -264,6 +264,7 @@ fun PocketBookmarkViewerPage(
     val minWidth by pocketRepo.minWidth.collectAsState()
     val minHeight by pocketRepo.minHeight.collectAsState()
     val minSizeKb by pocketRepo.minSizeKb.collectAsState()
+    val activeDeepScanId by pocketRepo.activeDeepScanId.collectAsState()
     val sanitizedStack = remember(
         stack, showSvg, showVideos, showStreams, showPng, showGif, minWidth, minHeight, minSizeKb
     ) {
@@ -519,7 +520,58 @@ fun PocketBookmarkViewerPage(
                             }
                         }
 
-                        // 4. Delete (monochrome)
+                        // 4. On-Demand 30s Deep Scan (Hardware-Accelerated with dynamic scan / stop toggle, no toast)
+                        if (stack.sourceUrl.isNotBlank()) {
+                            val isDeepScanning = activeDeepScanId == stack.id
+                            Surface(
+                                shape = CircleShape,
+                                color = if (isDeepScanning) (if (isDark) Color(0xFF2C1E1E) else Color(0xFFFFEBEE)) else barSurface,
+                                shadowElevation = if (isDark) 2.dp else 1.dp,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isDeepScanning) {
+                                        if (isDark) Color(0xFFE57373) else Color(0xFFE53935)
+                                    } else {
+                                        if (isDark) dividerCol.copy(alpha = 0.7f) else dividerCol
+                                    }
+                                ),
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clickable {
+                                        if (isDeepScanning) {
+                                            pocketRepo.stopDeepScan(stack.id)
+                                        } else {
+                                            pocketRepo.startDeepScan(stack.id, context)
+                                        }
+                                    }
+                                    .testTag("bookmark_viewer_deep_scan_button")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    if (isDeepScanning) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(34.dp),
+                                            strokeWidth = 2.dp,
+                                            color = if (isDark) Color(0xFFEF5350) else Color(0xFFE53935)
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Default.StopCircle,
+                                            contentDescription = "Stop deep scan",
+                                            tint = if (isDark) Color(0xFFEF5350) else Color(0xFFE53935),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.TravelExplore,
+                                            contentDescription = "Deep scan page media",
+                                            tint = textColor,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 5. Delete (monochrome)
                         Surface(
                             shape = CircleShape,
                             color = barSurface,

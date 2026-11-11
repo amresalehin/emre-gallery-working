@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import android.view.ViewConfiguration
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -84,6 +85,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem as ExoMediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -1177,6 +1179,12 @@ fun BookmarkDeckVideoPlayer(
                 repeatMode = Player.REPEAT_MODE_ONE
                 videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
                 volume = if (isMuted) 0f else 1f
+                addListener(object : Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        Log.w("BookmarkDeckVideoPlayer", "Playback error encountered: ${error.message}. Retrying prepare.")
+                        prepare()
+                    }
+                })
                 prepare()
                 playWhenReady = true
             }
@@ -1196,10 +1204,11 @@ fun BookmarkDeckVideoPlayer(
 
     DisposableEffect(lifecycleOwner, player) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) {
-                player.pause()
-            } else if (event == Lifecycle.Event.ON_RESUME && isPlaying) {
-                player.play()
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> player.pause()
+                Lifecycle.Event.ON_STOP -> player.stop()
+                Lifecycle.Event.ON_RESUME -> if (isPlaying) player.play()
+                else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

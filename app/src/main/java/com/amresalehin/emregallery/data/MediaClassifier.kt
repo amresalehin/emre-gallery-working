@@ -919,25 +919,55 @@ object MediaClassifier {
                 "." + match.groupValues[1]
             }
 
-            // 10. Format variants normalization (raster image formats .jpg, .jpeg, .webp, .avif, .png of the same asset)
-            // Deduplicate format variants by normalizing raster image extensions to .img
-            val normalizedFormatPath = if (Regex("""\.(?:jpe?g|webp|png|avif)$""", RegexOption.IGNORE_CASE).containsMatchIn(normalizedVideoPath)) {
+            val pathSegment = normalizedVideoPath.substringAfterLast('/')
+            val filenameWithoutExt = pathSegment.substringBeforeLast('.')
+            val genericFileNames = setOf(
+                "", "image", "photo", "pic", "picture", "logo", "icon", "thumb",
+                "thumbnail", "default", "avatar", "1", "0", "media", "view", "get", "fetch"
+            )
+
+            // Format variants normalization: only if filename is specific (not generic like logo.png or icon.png)
+            val normalizedFormatPath = if (filenameWithoutExt.length > 3 && !genericFileNames.contains(filenameWithoutExt) &&
+                Regex("""\.(?:jpe?g|webp|png|avif)$""", RegexOption.IGNORE_CASE).containsMatchIn(normalizedVideoPath)
+            ) {
                 normalizedVideoPath.replace(Regex("""\.(?:jpe?g|webp|png|avif)$""", RegexOption.IGNORE_CASE), ".img")
             } else {
                 normalizedVideoPath
             }
 
+            // CDN sizing query parameters used to group size variants
             val sizingParams = setOf(
                 "w", "width", "h", "height", "size", "s", "quality", "q",
                 "fit", "crop", "auto", "format", "fmt", "fm", "f", "dpr", "lossless", "strip",
                 "scale", "resize", "maxwidth", "maxheight",
-                "sqp", "rs", "sigh", "sig", "sparams",
-                "itag", "range", "ratebypass", "rn", "rbuf", "mime", "gir", "clen", "dur", "lmt"
+                "sqp", "rs", "sigh", "sig", "sparams"
             )
+
+            // Identifying parameters that represent distinct resources and must NEVER be stripped
+            val identifyingParams = setOf(
+                "id", "v", "vid", "video_id", "file", "filename", "name", "token", "item", "key",
+                "url", "media", "uuid", "guid", "asset", "photo_id", "docid", "user", "uid", "post_id"
+            )
+
+            val isGenericPath = pathSegment.isBlank() || pathSegment in genericFileNames || !pathSegment.contains('.')
+
             val filteredQuery = if (queryPart.isNotBlank()) {
-                queryPart.split("&").filter { param ->
+                val params = queryPart.split("&").filter { it.isNotBlank() }
+                val hasIdentifyingParam = params.any {
+                    identifyingParams.contains(it.substringBefore("=").lowercase(Locale.ROOT))
+                }
+                params.filter { param ->
                     val key = param.substringBefore("=").lowercase(Locale.ROOT)
-                    !TRACKING_QUERY_PARAMS.contains(key) && !sizingParams.contains(key)
+                    // 1. Strip only tracking parameters
+                    if (TRACKING_QUERY_PARAMS.contains(key)) return@filter false
+                    // 2. Identifying parameters are strictly preserved
+                    if (identifyingParams.contains(key)) return@filter true
+                    // 3. CDN sizing parameters are stripped to group size variants together,
+                    // UNLESS the path is a generic endpoint without identifying params (over-merging guard)
+                    if (sizingParams.contains(key)) {
+                        return@filter isGenericPath && !hasIdentifyingParam
+                    }
+                    true
                 }.sorted().joinToString("&")
             } else ""
 
@@ -1008,9 +1038,15 @@ object MediaClassifier {
                 if (px != null && px > 0) return px * px
             }
             val queryWidthMatch = Regex("""[?&](?:w|width)=(\d{2,5})""").find(url)
-            if (queryWidthMatch != null) {
-                val w = queryWidthMatch.groupValues[1].toLongOrNull()
-                if (w != null && w > 0) return w * w
+            val queryHeightMatch = Regex("""[?&](?:h|height)=(\d{2,5})""").find(url)
+            val qw = queryWidthMatch?.groupValues?.get(1)?.toLongOrNull()
+            val qh = queryHeightMatch?.groupValues?.get(1)?.toLongOrNull()
+            if (qw != null && qh != null && qw > 0 && qh > 0) {
+                return qw * qh
+            } else if (qw != null && qw > 0) {
+                return qw * qw
+            } else if (qh != null && qh > 0) {
+                return qh * qh
             }
         }
         return null

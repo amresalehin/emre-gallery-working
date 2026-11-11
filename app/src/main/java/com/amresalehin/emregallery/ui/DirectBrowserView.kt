@@ -729,6 +729,24 @@ fun DirectBrowserView(
                                         tabSession.registerMedia(item)
                                     }
                                 }
+
+                                override fun onRenderProcessGone(
+                                    view: WebView?,
+                                    detail: RenderProcessGoneDetail?
+                                ): Boolean {
+                                    val didCrash = detail?.didCrash() ?: false
+                                    Log.w("DirectBrowserView", "Chromium renderer process gone (didCrash=$didCrash). Cleanly recovering...")
+                                    try {
+                                        view?.let { wv ->
+                                            (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+                                            wv.destroy()
+                                        }
+                                    } catch (_: Throwable) {}
+                                    if (webViewInstance === view) {
+                                        webViewInstance = null
+                                    }
+                                    return true
+                                }
                             }
 
                             if (startUrl.isNotBlank()) {

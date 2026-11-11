@@ -79,8 +79,74 @@ object MediaNormalizer {
 
     /**
      * Computes the canonical deduplication key for a media URL.
+     * Strips only tracking parameters and fragments, groups CDN size variants,
+     * and guards against over-merging.
      */
     fun canonicalKey(url: String): String {
         return MediaClassifier.deduplicationKey(url)
+    }
+
+    /**
+     * Deduplicates a list of MediaInboxItem by grouping CDN size variants
+     * by canonical key, and keeping the largest / highest-quality variant in each group.
+     * Prevents over-merging by strictly preserving identifying query parameters.
+     */
+    fun deduplicateMediaInboxItems(items: List<MediaInboxItem>): List<MediaInboxItem> {
+        if (items.isEmpty()) return emptyList()
+        val groups = items.groupBy { item ->
+            val src = item.sourceUrl.ifBlank { item.localUri }
+            canonicalKey(src).ifBlank { item.id }
+        }
+        val largestList = groups.values.map { group ->
+            if (group.size == 1) group.first()
+            else {
+                group.maxWithOrNull { a, b ->
+                    compareInboxItemQuality(a, b)
+                } ?: group.first()
+            }
+        }
+        val (videos, images) = largestList.partition { it.isVideo || it.isStream }
+        return (videos + images)
+    }
+
+    /**
+     * Compares quality of two MediaInboxItem candidates.
+     * Returns > 0 if a is higher quality (larger, video over image, higher resolution).
+     */
+    fun compareInboxItemQuality(a: MediaInboxItem, b: MediaInboxItem): Int {
+        // Videos and streams take priority over images
+        if ((a.isVideo || a.isStream) && (!b.isVideo && !b.isStream)) return 1
+        if ((!a.isVideo && !a.isStream) && (b.isVideo || b.isStream)) return -1
+
+        // Compare parsed pixel areas
+        val aArea = MediaClassifier.parsePixelArea(null, a.sourceUrl)
+        val bArea = MediaClassifier.parsePixelArea(null, b.sourceUrl)
+        if (aArea != null && bArea != null && aArea != bArea) {
+            return aArea.compareTo(bArea)
+        }
+        if (aArea != null && bArea == null) return 1
+        if (aArea == null && bArea != null) return -1
+
+        // Compare sizeBytes if present
+        if (a.sizeBytes > 0L || b.sizeBytes > 0L) {
+            val cmp = a.sizeBytes.compareTo(b.sizeBytes)
+            if (cmp != 0) return cmp
+        }
+
+        // Master original URLs (/originals/)
+        val aOrig = a.sourceUrl.contains("/originals/", ignoreCase = true)
+        val bOrig = b.sourceUrl.contains("/originals/", ignoreCase = true)
+        if (aOrig && !bOrig) return 1
+        if (!aOrig && bOrig) return -1
+
+        // Format preference
+        val formatPriority = mapOf("PNG" to 4, "JPEG" to 3, "JPG" to 3, "WEBP" to 2, "AVIF" to 1)
+        val aFmt = formatPriority[a.format.uppercase(Locale.ROOT)] ?: 0
+        val bFmt = formatPriority[b.format.uppercase(Locale.ROOT)] ?: 0
+        if (aFmt != bFmt) {
+            return aFmt.compareTo(bFmt)
+        }
+
+        return 0
     }
 }
