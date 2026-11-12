@@ -96,13 +96,17 @@ fun DirectBrowserView(
     val allHistorySites by historyManager.allSites.collectAsState(initial = historyManager.defaultRecentSites)
     val tabsList by historyManager.openTabs.collectAsState(initial = historyManager.defaultTabs)
 
-    val startUrl = remember {
+    val startUrl = remember(initialUrl) {
         val trimmed = initialUrl.trim()
         if (trimmed.isNotBlank()) {
             MediaClassifier.formatQueryOrUrl(trimmed)
         } else {
             "" // Clean monochrome home page by default
         }
+    }
+
+    var launchedWithInitialUrl by remember(initialUrl) {
+        mutableStateOf(initialUrl.trim().isNotBlank())
     }
 
     var currentUrl by remember { mutableStateOf(startUrl) }
@@ -202,7 +206,19 @@ fun DirectBrowserView(
         }
     }
 
+    fun canWebViewGoBack(wv: WebView?): Boolean {
+        if (wv == null) return false
+        if (!wv.canGoBack()) return false
+        val list = wv.copyBackForwardList()
+        val currentIndex = list.currentIndex
+        if (currentIndex <= 0) return false
+        val prevItem = list.getItemAtIndex(currentIndex - 1)
+        val prevUrl = prevItem?.url.orEmpty().trim().lowercase()
+        return prevUrl.isNotBlank() && prevUrl != "about:blank" && !prevUrl.startsWith("data:")
+    }
+
     fun returnToBrowserHome() {
+        launchedWithInitialUrl = false
         currentUrl = ""
         addressInput = ""
         pageTitle = ""
@@ -226,8 +242,14 @@ fun DirectBrowserView(
             showSettingsSheet -> showSettingsSheet = false
             showAddShortcutDialog -> showAddShortcutDialog = false
             selectedShortcutForEdit != null -> selectedShortcutForEdit = null
-            webViewInstance?.canGoBack() == true -> {
+            addressInput.isNotBlank() && currentUrl.isBlank() -> {
+                addressInput = ""
+            }
+            canWebViewGoBack(webViewInstance) -> {
                 webViewInstance?.goBack()
+            }
+            launchedWithInitialUrl && onClose != null -> {
+                onClose()
             }
             currentUrl.isNotBlank() -> {
                 returnToBrowserHome()
@@ -240,6 +262,8 @@ fun DirectBrowserView(
     BackHandler(
         enabled = showHistorySheet || showTabsSheet || showSettingsSheet ||
                 showAddShortcutDialog || selectedShortcutForEdit != null ||
+                (addressInput.isNotBlank() && currentUrl.isBlank()) ||
+                canWebViewGoBack(webViewInstance) ||
                 currentUrl.isNotBlank() || onClose != null
     ) {
         handleBrowserBackNavigation()
@@ -248,6 +272,9 @@ fun DirectBrowserView(
     fun navigateToUrl(target: String) {
         val trimmed = target.trim()
         if (trimmed.isBlank()) return
+        if (currentUrl.isBlank()) {
+            launchedWithInitialUrl = false
+        }
         scrollHandler.show()
         val formatted = MediaClassifier.formatQueryOrUrl(trimmed)
         tabSession.clearMedia()
@@ -264,6 +291,17 @@ fun DirectBrowserView(
         }
         webViewInstance?.loadUrl(formatted)
         focusManager.clearFocus()
+    }
+
+    LaunchedEffect(initialUrl) {
+        val trimmed = initialUrl.trim()
+        if (trimmed.isNotBlank()) {
+            val formatted = MediaClassifier.formatQueryOrUrl(trimmed)
+            launchedWithInitialUrl = true
+            if (formatted != currentUrl) {
+                navigateToUrl(formatted)
+            }
+        }
     }
 
     fun triggerOnDemandDiscovery(openWhenDone: Boolean = true) {
@@ -490,8 +528,11 @@ fun DirectBrowserView(
                     showSettingsSheet = true
                 },
                 isWebPage = currentUrl.isNotBlank(),
-                onHomeClick = {
+                onBackClick = {
                     handleBrowserBackNavigation()
+                },
+                onHomeClick = {
+                    returnToBrowserHome()
                 },
                 onCloseBrowser = onClose,
                 tabCount = tabsList.size,
@@ -745,7 +786,7 @@ fun DirectBrowserView(
                                     tabSession.updateNavigation(url, pageTitle)
                                     DownloaderSession.updateBrowserPage(url)
                                     syncCurrentTabWithPage(url, pageTitle)
-                                    canGoBack = view?.canGoBack() == true
+                                    canGoBack = canWebViewGoBack(view)
                                     canGoForward = view?.canGoForward() == true
                                 }
 
@@ -760,7 +801,7 @@ fun DirectBrowserView(
                                     tabSession.updateNavigation(url, finalTitle)
                                     DownloaderSession.updateBrowserPage(url)
                                     syncCurrentTabWithPage(url, finalTitle)
-                                    canGoBack = view?.canGoBack() == true
+                                    canGoBack = canWebViewGoBack(view)
                                     canGoForward = view?.canGoForward() == true
                                 }
 

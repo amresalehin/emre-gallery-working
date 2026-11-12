@@ -133,10 +133,11 @@ object PreparedThumbnailCache {
     }
 
     private fun cacheKey(uri: String, widthPx: Int, heightPx: Int): String {
+        val cleanUri = if (uri.contains("?")) uri.substringBefore("?") else uri
         val normalizedWidth = widthPx.coerceIn(96, 512)
         val normalizedHeight = heightPx.coerceIn(96, 512)
         val bytes = MessageDigest.getInstance("SHA-256")
-            .digest("$uri|$normalizedWidth|$normalizedHeight".toByteArray(Charsets.UTF_8))
+            .digest("$cleanUri|$normalizedWidth|$normalizedHeight".toByteArray(Charsets.UTF_8))
         return bytes.joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
     }
 
@@ -201,7 +202,151 @@ object PreparedThumbnailCache {
                     if (cause is CancellationException) signal.cancel()
                 }
                 try {
-                    context.contentResolver.loadThumbnail(uri, Size(targetWidth, targetHeight), signal)
+                    // 1. Primary standard loadThumbnail attempt
+                    val primary = runCatching {
+                        context.contentResolver.loadThumbnail(uri, Size(targetWidth, targetHeight), signal)
+                    }.getOrNull()
+                    if (primary != null) return@withContext primary
+
+                    // 2. Retry with explicit trashed flags for binned media
+                    val trashedUri = if (uri.getQueryParameter("includeTrashed") == null) {
+                        uri.buildUpon()
+                            .appendQueryParameter("includeTrashed", "1")
+                            .appendQueryParameter("android:query-arg-match-trashed", "1")
+                            .build()
+                    } else uri
+
+                    val trashedThumb = runCatching {
+                        context.contentResolver.loadThumbnail(trashedUri, Size(targetWidth, targetHeight), signal)
+                    }.getOrNull()
+                    if (trashedThumb != null) return@withContext trashedThumb
+
+                    // 3. File descriptor fallback with decode or frame extraction
+                    val pfd = runCatching {
+                        context.contentResolver.openFileDescriptor(trashedUri, "r", signal)
+                    }.getOrNull() ?: runCatching {
+                        context.contentResolver.openFileDescriptor(uri, "r", signal)
+                    }.getOrNull()
+
+                    if (pfd != null) {
+                        pfd.use { descriptor ->
+                            val fd = descriptor.fileDescriptor
+                            val isVideo = uri.path?.contains("/video/") == true ||
+                                runCatching { context.contentResolver.getType(uri)?.startsWith("video/") == true }.getOrDefault(false)
+
+                            if (isVideo) {
+                                val mmr = android.media.MediaMetadataRetriever()
+                                try {
+                                    mmr.setDataSource(fd)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                                        val frame = mmr.getScaledFrameAtTime(-1, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, targetWidth, targetHeight)
+                                            ?: mmr.frameAtTime
+                                        if (frame != null) return@withContext frame
+                                    } else {
+                                        val frame = mmr.frameAtTime
+                                        if (frame != null) return@withContext frame
+                                    }
+                                } catch (_: Exception) {
+                                } finally {
+                                    runCatching { mmr.release() }
+                                }
+                            } else {
+                                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                BitmapFactory.decodeFileDescriptor(fd, null, bounds)
+                                if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+                                    var inSampleSize = 1
+                                    if (bounds.outHeight > targetHeight || bounds.outWidth > targetWidth) {
+                                        val halfHeight = bounds.outHeight / 2
+                                        val halfWidth = bounds.outWidth / 2
+                                        while (halfHeight / inSampleSize >= targetHeight && halfWidth / inSampleSize >= targetWidth) {
+                                            inSampleSize *= 2
+                                        }
+                                    }
+                                    val decodeOpts = BitmapFactory.Options().apply {
+                                        this.inSampleSize = inSampleSize
+                                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                                    }
+                                    val decoded = BitmapFactory.decodeFileDescriptor(fd, null, decodeOpts)
+                                    if (decoded != null) return@withContext decoded
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. Query physical file path (_data) with trashed permission
+                    val filePath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        val qArgs = android.os.Bundle().apply {
+                            putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+                        }
+                        runCatching {
+                            context.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), qArgs, signal)?.use { cursor ->
+                                if (cursor.moveToFirst()) cursor.getString(0) else null
+                            }
+                        }.getOrNull()
+                    } else {
+                        runCatching {
+                            context.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { cursor ->
+                                if (cursor.moveToFirst()) cursor.getString(0) else null
+                            }
+                        }.getOrNull()
+                    }
+
+                    if (!filePath.isNullOrBlank()) {
+                        val file = File(filePath)
+                        if (file.exists() && file.canRead()) {
+                            val isVideo = uri.path?.contains("/video/") == true ||
+                                filePath.endsWith(".mp4", ignoreCase = true) ||
+                                filePath.endsWith(".mkv", ignoreCase = true) ||
+                                filePath.endsWith(".webm", ignoreCase = true)
+
+                            if (isVideo) {
+                                val mmr = android.media.MediaMetadataRetriever()
+                                try {
+                                    mmr.setDataSource(filePath)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                                        val frame = mmr.getScaledFrameAtTime(-1, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, targetWidth, targetHeight)
+                                            ?: mmr.frameAtTime
+                                        if (frame != null) return@withContext frame
+                                    } else {
+                                        val frame = mmr.frameAtTime
+                                        if (frame != null) return@withContext frame
+                                    }
+                                } catch (_: Exception) {
+                                } finally {
+                                    runCatching { mmr.release() }
+                                }
+                            } else {
+                                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                BitmapFactory.decodeFile(filePath, bounds)
+                                if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+                                    var inSampleSize = 1
+                                    if (bounds.outHeight > targetHeight || bounds.outWidth > targetWidth) {
+                                        val halfHeight = bounds.outHeight / 2
+                                        val halfWidth = bounds.outWidth / 2
+                                        while (halfHeight / inSampleSize >= targetHeight && halfWidth / inSampleSize >= targetWidth) {
+                                            inSampleSize *= 2
+                                        }
+                                    }
+                                    val decodeOpts = BitmapFactory.Options().apply {
+                                        this.inSampleSize = inSampleSize
+                                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                                    }
+                                    val decoded = BitmapFactory.decodeFile(filePath, decodeOpts)
+                                    if (decoded != null) return@withContext decoded
+                                }
+                            }
+                        }
+                    }
+
+                    // 5. Stream decode fallback
+                    val stream = runCatching { context.contentResolver.openInputStream(trashedUri) }.getOrNull()
+                        ?: runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
+                    stream?.use { s ->
+                        val decoded = BitmapFactory.decodeStream(s)
+                        if (decoded != null) return@withContext decoded
+                    }
+
+                    null
                 } finally {
                     cancellationHandle?.dispose()
                 }

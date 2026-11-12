@@ -28,13 +28,8 @@ class MediaStoreThumbnailFetcher(
     override suspend fun fetch(): FetchResult? = withContext(Dispatchers.IO) {
         val widthDim = options.size.width
         val heightDim = options.size.height
-        if (widthDim !is Dimension.Pixels || heightDim !is Dimension.Pixels) {
-            return@withContext null
-        }
-
-        val widthPx = widthDim.px
-        val heightPx = heightDim.px
-        if (widthPx > 1024 || heightPx > 1024) return@withContext null
+        val widthPx = if (widthDim is Dimension.Pixels) widthDim.px else 512
+        val heightPx = if (heightDim is Dimension.Pixels) heightDim.px else 512
 
         val prepared = PreparedThumbnailCache.loadOrCreate(context, uri, widthPx, heightPx)
             ?: return@withContext null
@@ -51,13 +46,7 @@ class MediaStoreThumbnailFetcher(
             if (data.scheme == "content" &&
                 (data.authority == "media" || data.authority == MediaStore.AUTHORITY)
             ) {
-                val widthDim = options.size.width
-                val heightDim = options.size.height
-                if (widthDim is Dimension.Pixels && heightDim is Dimension.Pixels &&
-                    widthDim.px <= 1024 && heightDim.px <= 1024
-                ) {
-                    return MediaStoreThumbnailFetcher(context, data, options)
-                }
+                return MediaStoreThumbnailFetcher(context, data, options)
             }
             return null
         }

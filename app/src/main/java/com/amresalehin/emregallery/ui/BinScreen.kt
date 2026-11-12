@@ -378,6 +378,7 @@ private fun BinItemCard(
                     .aspectRatio(1f)
                     .trackThumbnailBounds(item.uri)
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
                     .combinedClickable(
                         onClick = onOpen,
                         onLongClick = onLongPress
@@ -386,7 +387,7 @@ private fun BinItemCard(
                 val context = LocalContext.current
                 AsyncImage(
                     model = remember(item.uri, context) {
-                        ThumbnailUtils.buildThumbnailRequest(context, item.uri)
+                        ThumbnailUtils.buildThumbnailRequest(context, item.uri, isTrashed = true)
                     },
                     contentDescription = item.name,
                     modifier = Modifier.fillMaxSize().graphicsLayer {

@@ -450,6 +450,7 @@ fun BrowserTopBar(
     onClearHistoryClick: () -> Unit,
     onSettingsClick: () -> Unit,
     isWebPage: Boolean = false,
+    onBackClick: (() -> Unit)? = null,
     onHomeClick: (() -> Unit)? = null,
     onCloseBrowser: (() -> Unit)? = null,
     tabCount: Int = 0,
@@ -514,14 +515,19 @@ fun BrowserTopBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Left Button: When search is focused, always show Left Back button to exit search mode.
-            // When unfocused on a web page, show Back to home.
-            // When unfocused on homepage, show Hamburger Menu.
+            // When in sub-page, web page, or inside gallery (onCloseBrowser != null), show Back button.
+            // Only when no exit or back action is available, show Hamburger Menu.
+            val showBackButton = isInputFocused || isWebPage || onBackClick != null || onCloseBrowser != null
             IconButton(
                 onClick = {
                     if (isInputFocused) {
                         focusManager.clearFocus()
                         keyboardController?.hide()
                         isInputFocused = false
+                    } else if (onBackClick != null) {
+                        onBackClick()
+                    } else if (onCloseBrowser != null) {
+                        onCloseBrowser()
                     } else if (isWebPage && onHomeClick != null) {
                         onHomeClick()
                     } else {
@@ -533,8 +539,8 @@ fun BrowserTopBar(
                     .testTag("top_bar_hamburger_btn")
             ) {
                 Icon(
-                    imageVector = if (isInputFocused || isWebPage) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                    contentDescription = if (isInputFocused) "Back" else if (isWebPage) "Back to home" else "Menu",
+                    imageVector = if (showBackButton) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                    contentDescription = if (isInputFocused) "Back" else if (isWebPage) "Back" else if (onCloseBrowser != null || onBackClick != null) "Back to gallery" else "Menu",
                     tint = BrowserThemeColors.iconTint(isDark),
                     modifier = Modifier.size(22.dp)
                 )
@@ -851,6 +857,14 @@ fun BrowserTopBar(
                             )
                         }
                         HorizontalDivider(color = BrowserThemeColors.divider(isDark))
+                        DropdownMenuItem(
+                            text = { Text("Navigation menu", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                            leadingIcon = { Icon(Icons.Default.Menu, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                            onClick = {
+                                showMenu = false
+                                onHamburgerClick()
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("Home", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
                             leadingIcon = { Icon(Icons.Default.Home, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },

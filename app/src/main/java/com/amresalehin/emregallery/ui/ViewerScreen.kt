@@ -470,6 +470,7 @@ fun ViewerScreen(
                     videoState = if (currentItem.isVideo && currentItem.uri == item.uri) videoState else null,
                     touchSlop = viewConfig.scaledTouchSlop.toFloat(),
                     minFlingVelocity = minFlingVelocity,
+                    isBin = isBin,
                     onToggleControls = {
                         if (!showDetails) onToggleControls()
                     },
@@ -816,6 +817,7 @@ private fun ZoomableMediaItem(
     transitionProgress: Float = 1f,
     targetBounds: androidx.compose.ui.geometry.Rect? = null,
     dismissOffsetY: Float = 0f,
+    isBin: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -830,8 +832,9 @@ private fun ZoomableMediaItem(
     // Keep video posters on the same cached MediaStore thumbnail used by the grid.
     // Decoding an independent video frame here can make the poster change before ExoPlayer's first frame.
     val context = LocalContext.current
-    val imageRequest = remember(item.uri, isVideo, context) {
-        ThumbnailUtils.buildViewerRequest(context, item.uri, isVideo)
+    val isTrashed = isBin || item.isTrashed
+    val imageRequest = remember(item.uri, isVideo, isTrashed, context) {
+        ThumbnailUtils.buildViewerRequest(context, item.uri, isVideo, isTrashed = isTrashed)
     }
 
     // Reset zoom when navigating away from this page

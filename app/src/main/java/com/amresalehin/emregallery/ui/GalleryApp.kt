@@ -657,10 +657,14 @@ fun GalleryApp() {
                 Destination.LOCKED_FOLDER,
                 Destination.ARCHIVE,
                 Destination.PEOPLE,
-                Destination.MAP,
-                Destination.BROWSER
+                Destination.MAP
             ) -> {
                 destination = Destination.ALBUMS
+                mapFocusItem = null
+                viewerStoryTitle = null
+            }
+            destination == Destination.BROWSER -> {
+                destination = previousDestination.takeIf { it != Destination.BROWSER } ?: Destination.HOME
                 mapFocusItem = null
                 viewerStoryTitle = null
             }
