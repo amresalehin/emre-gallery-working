@@ -1,0 +1,6 @@
+{
+  "name": "Emre Gallery",
+  "description": "Gallery app with browser, pocket, media downloader, and face recognition",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

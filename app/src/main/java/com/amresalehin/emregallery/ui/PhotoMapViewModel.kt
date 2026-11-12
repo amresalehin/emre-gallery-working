@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class PhotoMapViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val locationCache = PhotoMapLocationCache(application.applicationContext)
+    private val locationCache = PhotoMapLocationCache.getInstance(application.applicationContext)
     private val placeNameCache = ConcurrentHashMap<String, String>()
     private var indexingJob: Job? = null
 

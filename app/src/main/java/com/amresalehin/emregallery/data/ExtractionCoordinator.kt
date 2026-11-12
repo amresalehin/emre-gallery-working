@@ -149,7 +149,11 @@ class ExtractionCoordinator(private val context: Context) {
                     GalleryDlEngine.checkSupport(requestContext.url)
                 }
 
-                val cookies = OkHttpDownloader.sharedCookieJar.getCookieString(requestContext.url).takeIf { it.isNotBlank() }
+                val browserCookies = runCatching {
+                    android.webkit.CookieManager.getInstance().getCookie(requestContext.url)
+                }.getOrNull()
+                val cookies = browserCookies?.takeIf { it.isNotBlank() }
+                    ?: OkHttpDownloader.sharedCookieJar.getCookieString(requestContext.url).takeIf { it.isNotBlank() }
                 val options = GalleryDlOptions(cookies = cookies)
 
                 // Launch concurrent discovery jobs:

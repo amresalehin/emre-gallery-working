@@ -41,17 +41,22 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import android.app.Activity
 import android.os.Build
+import com.amresalehin.emregallery.data.AdBlockEngine
 import com.amresalehin.emregallery.data.BotDetectionMitigator
 import com.amresalehin.emregallery.data.BrowserHistoryManager
 import com.amresalehin.emregallery.data.BrowserSession
 import com.amresalehin.emregallery.data.BrowserShortcut
 import com.amresalehin.emregallery.data.BrowserTabItem
 import com.amresalehin.emregallery.data.DownloaderSession
+import com.amresalehin.emregallery.data.DualMediaExtractor
+import com.amresalehin.emregallery.data.ExtractionCoordinator
 import com.amresalehin.emregallery.data.ExtractionSource
 import com.amresalehin.emregallery.data.MediaCaptureEngine
 import com.amresalehin.emregallery.data.MediaClassifier
 import com.amresalehin.emregallery.data.PreferencesRepository
+import com.amresalehin.emregallery.data.SafeWebViewCleanup
 import com.amresalehin.emregallery.data.ScrapedMediaItem
+import com.amresalehin.emregallery.data.TargetMediaExpectation
 import kotlinx.coroutines.launch
 import java.net.URL
 
@@ -112,8 +117,11 @@ fun DirectBrowserView(
     var isLoading by remember { mutableStateOf(false) }
     var loadingProgress by remember { mutableFloatStateOf(0f) }
     var isDesktopMode by remember { mutableStateOf(false) }
+    var isScanningMedia by remember { mutableStateOf(false) }
 
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+    var webViewSessionKey by remember { mutableIntStateOf(0) }
+    val capturedStreamUrls = remember { java.util.Collections.synchronizedSet(LinkedHashSet<String>()) }
 
     // Dialog & Sheet States
     var showAddShortcutDialog by remember { mutableStateOf(false) }
@@ -194,24 +202,13 @@ fun DirectBrowserView(
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            webViewInstance?.let { wv ->
-                wv.stopLoading()
-                wv.webViewClient = WebViewClient()
-                wv.webChromeClient = WebChromeClient()
-                wv.destroy()
-                webViewInstance = null
-            }
-        }
-    }
-
     fun returnToBrowserHome() {
         currentUrl = ""
         addressInput = ""
         pageTitle = ""
         canGoBack = false
         canGoForward = false
+        capturedStreamUrls.clear()
         onUrlChange?.invoke("")
         tabSession.clearMedia()
         tabSession.updateNavigation("")
@@ -229,12 +226,11 @@ fun DirectBrowserView(
             showSettingsSheet -> showSettingsSheet = false
             showAddShortcutDialog -> showAddShortcutDialog = false
             selectedShortcutForEdit != null -> selectedShortcutForEdit = null
+            webViewInstance?.canGoBack() == true -> {
+                webViewInstance?.goBack()
+            }
             currentUrl.isNotBlank() -> {
-                if (canGoBack && webViewInstance?.canGoBack() == true) {
-                    webViewInstance?.goBack()
-                } else {
-                    returnToBrowserHome()
-                }
+                returnToBrowserHome()
             }
             onClose != null -> onClose()
         }
@@ -256,6 +252,7 @@ fun DirectBrowserView(
         val formatted = MediaClassifier.formatQueryOrUrl(trimmed)
         tabSession.clearMedia()
         DownloaderSession.clear()
+        capturedStreamUrls.clear()
         addressInput = formatted
         currentUrl = formatted
         onUrlChange?.invoke(formatted)
@@ -269,18 +266,73 @@ fun DirectBrowserView(
         focusManager.clearFocus()
     }
 
-    fun scanCurrentPageDOM(wv: WebView?) {
-        if (wv == null) return
-        val current = wv.url ?: return
-        if (current.isBlank() || current == "about:blank" || currentUrl.isBlank()) return
+    fun triggerOnDemandDiscovery(openWhenDone: Boolean = true) {
+        val wv = webViewInstance ?: return
+        val current = wv.url?.takeIf { it.isNotBlank() && it != "about:blank" } ?: currentUrl
+        if (current.isBlank() || current == "about:blank") {
+            return
+        }
+
+        if (isScanningMedia) {
+            return
+        }
+
+        isScanningMedia = true
 
         wv.evaluateJavascript(MediaCaptureEngine.getJsDomScanScript()) { jsonRaw ->
-            val discovered = MediaCaptureEngine.parseJsDomScanResult(jsonRaw, current)
-            if (discovered.isNotEmpty()) {
-                val domain = runCatching { URL(current).host }.getOrDefault("")
-                tabSession.registerMediaBatch(discovered, pageTitle)
-                onBatchExtracted(discovered, pageTitle, domain)
-                DownloaderSession.addDiscoveredItems(discovered, pageTitle)
+            val payload = MediaCaptureEngine.parseJsDomScanPayload(jsonRaw, current)
+            val effectiveUrl = payload.pageUrl.ifBlank { current }
+            val effectiveTitle = payload.pageTitle.ifBlank { pageTitle }
+            if (effectiveUrl != currentUrl && effectiveUrl != "about:blank") {
+                currentUrl = effectiveUrl
+                addressInput = effectiveUrl
+                onUrlChange?.invoke(effectiveUrl)
+            }
+            if (effectiveTitle.isNotBlank() && effectiveTitle != pageTitle) {
+                pageTitle = effectiveTitle
+                onPageTitleChanged?.invoke(effectiveTitle)
+            }
+
+            // Convert captured active streaming URLs (e.g. .m3u8, .mpd, /videoplayback) into ScrapedMediaItem
+            val capturedItems = synchronized(capturedStreamUrls) {
+                capturedStreamUrls.mapNotNull { streamUrl ->
+                    MediaCaptureEngine.buildMediaItem(
+                        rawUrl = streamUrl,
+                        source = ExtractionSource.NETWORK_INTERCEPT,
+                        baseUrl = effectiveUrl,
+                        mimeHint = if (streamUrl.contains("/videoplayback")) "video/mp4" else null
+                    )
+                }
+            }
+
+            val combinedDiscovered = payload.items + capturedItems
+            val domain = runCatching { URL(effectiveUrl).host }.getOrDefault("")
+            if (combinedDiscovered.isNotEmpty()) {
+                tabSession.registerMediaBatch(combinedDiscovered, effectiveTitle)
+                onBatchExtracted(combinedDiscovered, effectiveTitle, domain)
+                DownloaderSession.addDiscoveredItems(combinedDiscovered, effectiveTitle)
+            }
+
+            val expectation = ExtractionCoordinator.determineExpectation(effectiveUrl)
+            if (expectation != TargetMediaExpectation.GENERIC_ANY || combinedDiscovered.isEmpty()) {
+                coroutineScope.launch {
+                    try {
+                        val extractor = DualMediaExtractor(context)
+                        extractor.extract(effectiveUrl, this)
+                    } catch (e: Exception) {
+                        Log.w("DirectBrowserView", "On-demand extraction error", e)
+                    } finally {
+                        isScanningMedia = false
+                        if (openWhenDone) {
+                            onOpenDiscoveredMedia?.invoke() ?: onSwitchToMediaTab()
+                        }
+                    }
+                }
+            } else {
+                isScanningMedia = false
+                if (openWhenDone) {
+                    onOpenDiscoveredMedia?.invoke() ?: onSwitchToMediaTab()
+                }
             }
         }
     }
@@ -313,8 +365,16 @@ fun DirectBrowserView(
                     }
                 },
                 onDiscoveredMediaClick = {
-                    onOpenDiscoveredMedia?.invoke() ?: onSwitchToMediaTab()
+                    if (totalDetectedCount == 0 && currentUrl.isNotBlank() && currentUrl != "about:blank") {
+                        triggerOnDemandDiscovery(openWhenDone = true)
+                    } else {
+                        onOpenDiscoveredMedia?.invoke() ?: onSwitchToMediaTab()
+                    }
                 },
+                onScanPageMedia = {
+                    triggerOnDemandDiscovery(openWhenDone = false)
+                },
+                isScanningMedia = isScanningMedia,
                 discoveredCount = totalDetectedCount,
                 onNewTabClick = {
                     val newId = "tab_${System.currentTimeMillis()}"
@@ -512,34 +572,34 @@ fun DirectBrowserView(
                     .fillMaxWidth()
             ) {
                 // Interactive WebView (always instantiated for high-speed responsiveness)
-                AndroidView(
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            webViewInstance = this
-                            layoutParams = android.view.ViewGroup.LayoutParams(
-                                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                                android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                            )
+                key(webViewSessionKey) {
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                webViewInstance = this
+                                layoutParams = android.view.ViewGroup.LayoutParams(
+                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                                )
 
-                            setBackgroundColor(if (isDark) android.graphics.Color.parseColor("#111111") else android.graphics.Color.WHITE)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                settings.forceDark = if (isDark) WebSettings.FORCE_DARK_ON else WebSettings.FORCE_DARK_OFF
-                            }
-                            settings.apply {
-                                javaScriptEnabled = true
-                                domStorageEnabled = true
-                                databaseEnabled = true
-                                javaScriptCanOpenWindowsAutomatically = true
-                                setSupportMultipleWindows(false)
-                                cacheMode = WebSettings.LOAD_DEFAULT
-                                builtInZoomControls = true
-                                displayZoomControls = false
-                                useWideViewPort = true
-                                loadWithOverviewMode = true
-                                mediaPlaybackRequiresUserGesture = false
-                                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                userAgentString = BotDetectionMitigator.STEALTH_USER_AGENT
-                            }
+                                setBackgroundColor(if (isDark) android.graphics.Color.parseColor("#111111") else android.graphics.Color.WHITE)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    settings.forceDark = if (isDark) WebSettings.FORCE_DARK_ON else WebSettings.FORCE_DARK_OFF
+                                }
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    javaScriptCanOpenWindowsAutomatically = true
+                                    setSupportMultipleWindows(false)
+                                    cacheMode = WebSettings.LOAD_DEFAULT
+                                    builtInZoomControls = true
+                                    displayZoomControls = false
+                                    useWideViewPort = true
+                                    loadWithOverviewMode = true
+                                    mediaPlaybackRequiresUserGesture = false
+                                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    userAgentString = BotDetectionMitigator.STEALTH_USER_AGENT
+                                }
 
                             addJavascriptInterface(
                                 BrowserSession.EmreMediaBridge { rawUrl ->
@@ -664,6 +724,7 @@ fun DirectBrowserView(
 
                                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                     scrollHandler.show()
+                                    capturedStreamUrls.clear()
                                     if (url.isNullOrBlank() || url == "about:blank") {
                                         tabSession.clearMedia()
                                         tabSession.updateNavigation("")
@@ -684,6 +745,21 @@ fun DirectBrowserView(
                                     tabSession.updateNavigation(url, pageTitle)
                                     DownloaderSession.updateBrowserPage(url)
                                     syncCurrentTabWithPage(url, pageTitle)
+                                    canGoBack = view?.canGoBack() == true
+                                    canGoForward = view?.canGoForward() == true
+                                }
+
+                                override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                                    super.doUpdateVisitedHistory(view, url, isReload)
+                                    if (url.isNullOrBlank() || url == "about:blank") return
+                                    currentUrl = url
+                                    addressInput = url
+                                    onUrlChange?.invoke(url)
+                                    val finalTitle = view?.title.orEmpty().ifBlank { pageTitle }
+                                    pageTitle = finalTitle
+                                    tabSession.updateNavigation(url, finalTitle)
+                                    DownloaderSession.updateBrowserPage(url)
+                                    syncCurrentTabWithPage(url, finalTitle)
                                     canGoBack = view?.canGoBack() == true
                                     canGoForward = view?.canGoForward() == true
                                 }
@@ -709,8 +785,8 @@ fun DirectBrowserView(
                                     coroutineScope.launch {
                                         historyManager.recordVisit(url, view?.title)
                                     }
-                                    view?.evaluateJavascript(MediaCaptureEngine.getMutationObserverScript(), null)
-                                    scanCurrentPageDOM(view)
+                                    // Automatic background media discovery disabled for active browser normal browsing.
+                                    // Media discovery is strictly on-demand.
                                     canGoBack = view?.canGoBack() == true
                                     canGoForward = view?.canGoForward() == true
                                 }
@@ -722,12 +798,23 @@ fun DirectBrowserView(
                                     val reqUrl = request?.url?.toString() ?: return null
                                     if (reqUrl.startsWith("about:")) return null
 
-                                    return MediaCaptureEngine.shouldInterceptRequest(
-                                        request = request,
-                                        baseUrl = currentUrl
-                                    ) { item ->
-                                        tabSession.registerMedia(item)
+                                    // Block ad and tracker networks
+                                    if (AdBlockEngine.isAdOrTracker(reqUrl)) {
+                                        return AdBlockEngine.createEmptyResponse()
                                     }
+
+                                    // Passively buffer active media streams for on-demand discovery without background downloading
+                                    val path = try { java.net.URI.create(reqUrl).path?.lowercase() ?: "" } catch (_: Exception) { "" }
+                                    val isStreamOrVideo = path.endsWith(".m3u8") || path.endsWith(".mpd") ||
+                                            path.contains("chunklist") || path.endsWith(".mp4") || path.endsWith(".webm") ||
+                                            path.endsWith(".mov") || path.endsWith(".mkv") ||
+                                            path.contains("/videoplayback") || path.contains("googlevideo.com")
+
+                                    if (isStreamOrVideo) {
+                                        capturedStreamUrls.add(reqUrl)
+                                    }
+
+                                    return null
                                 }
 
                                 override fun onRenderProcessGone(
@@ -736,21 +823,18 @@ fun DirectBrowserView(
                                 ): Boolean {
                                     val didCrash = detail?.didCrash() ?: false
                                     Log.w("DirectBrowserView", "Chromium renderer process gone (didCrash=$didCrash). Cleanly recovering...")
-                                    try {
-                                        view?.let { wv ->
-                                            (wv.parent as? android.view.ViewGroup)?.removeView(wv)
-                                            wv.destroy()
-                                        }
-                                    } catch (_: Throwable) {}
+                                    SafeWebViewCleanup.safeDestroy(view)
                                     if (webViewInstance === view) {
                                         webViewInstance = null
                                     }
+                                    webViewSessionKey++
                                     return true
                                 }
                             }
 
-                            if (startUrl.isNotBlank()) {
-                                loadUrl(startUrl)
+                            val targetUrl = currentUrl.ifBlank { startUrl }
+                            if (targetUrl.isNotBlank() && targetUrl != "about:blank") {
+                                loadUrl(targetUrl)
                             }
                         }
                     },
@@ -762,10 +846,7 @@ fun DirectBrowserView(
                         }
                     },
                     onRelease = { wv ->
-                        wv.stopLoading()
-                        wv.webViewClient = WebViewClient()
-                        wv.webChromeClient = WebChromeClient()
-                        wv.destroy()
+                        SafeWebViewCleanup.safeDestroy(wv)
                         if (webViewInstance === wv) {
                             webViewInstance = null
                         }
@@ -774,6 +855,7 @@ fun DirectBrowserView(
                         .fillMaxSize()
                         .testTag("browser_webview_canvas")
                 )
+            }
 
                 // 2. Minimalist Monochrome Mobile Browser Home Layout (blank when empty)
                 if (currentUrl.isBlank()) {

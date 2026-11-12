@@ -174,12 +174,8 @@ object BrowserSession {
             fun cleanup() {
                 try {
                     mainHandler.removeCallbacksAndMessages(null)
-                    (webView?.parent as? ViewGroup)?.removeView(webView)
-                    webView?.stopLoading()
                     webView?.removeJavascriptInterface("EmreBridge")
-                    webView?.webViewClient = WebViewClient()
-                    webView?.webChromeClient = WebChromeClient()
-                    webView?.destroy()
+                    SafeWebViewCleanup.safeDestroy(webView)
                 } catch (_: Throwable) {
                 } finally {
                     webView = null
@@ -219,7 +215,6 @@ object BrowserSession {
                 wv.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
-                    databaseEnabled = true
                     useWideViewPort = true
                     loadWithOverviewMode = true
                     mediaPlaybackRequiresUserGesture = false
@@ -395,11 +390,7 @@ object BrowserSession {
             fun cleanup() {
                 try {
                     mainHandler.removeCallbacksAndMessages(null)
-                    (webView?.parent as? ViewGroup)?.removeView(webView)
-                    webView?.stopLoading()
-                    webView?.webViewClient = WebViewClient()
-                    webView?.webChromeClient = WebChromeClient()
-                    webView?.destroy()
+                    SafeWebViewCleanup.safeDestroy(webView)
                 } catch (_: Throwable) {
                 } finally {
                     webView = null
@@ -464,7 +455,6 @@ object BrowserSession {
                 wv.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
-                    databaseEnabled = true
                     useWideViewPort = true
                     loadWithOverviewMode = true
                     mediaPlaybackRequiresUserGesture = false

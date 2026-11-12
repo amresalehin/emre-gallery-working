@@ -743,7 +743,7 @@ fun OverviewTabContent(
     var metadataExpanded by remember { mutableStateOf(true) }
 
     val cachedLocation = remember(item.uri) {
-        com.amresalehin.emregallery.data.PhotoMapLocationCache(context).getLocation(item.uri)
+        com.amresalehin.emregallery.data.PhotoMapLocationCache.getInstance(context).getLocation(item.uri)
     }
     val hasTags = customTags.isNotEmpty()
     val hasPeople = detectedFaces.isNotEmpty()

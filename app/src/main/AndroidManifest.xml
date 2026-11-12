@@ -47,6 +47,11 @@
         android:largeHeap="true"
         android:hardwareAccelerated="true"
         android:theme="@style/Theme.EmreGallery">
+
+        <meta-data
+            android:name="android.webkit.WebView.EnableSafeBrowsing"
+            android:value="false" />
+
         <service
             android:name=".IndexingForegroundService"
             android:exported="false"

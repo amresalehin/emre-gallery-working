@@ -182,7 +182,6 @@ object PocketDeepScanEngine {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
-                databaseEnabled = true
                 mediaPlaybackRequiresUserGesture = true
                 loadsImagesAutomatically = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -218,17 +217,7 @@ object PocketDeepScanEngine {
     }
 
     private fun destroyWebView(wv: WebView?) {
-        if (wv == null) return
-        try {
-            wv.stopLoading()
-            wv.loadUrl("about:blank")
-            wv.clearHistory()
-            wv.onPause()
-            (wv.parent as? ViewGroup)?.removeView(wv)
-            wv.destroy()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error cleaning up deep scan WebView", e)
-        }
+        SafeWebViewCleanup.safeDestroy(wv)
     }
 
     private suspend fun evaluateJavascriptSuspend(wv: WebView, script: String): String =

@@ -189,8 +189,8 @@ object PlaceLocationResolver {
  */
 class SearchEngine(private val context: Context) {
 
-    private val faceStore = FaceClusterStore(context.applicationContext)
-    private val locationCache = PhotoMapLocationCache(context.applicationContext)
+    private val faceStore = FaceClusterStore.getInstance(context.applicationContext)
+    private val locationCache = PhotoMapLocationCache.getInstance(context.applicationContext)
 
     /**
      * Builds real discovery sections for State A (Search opened, no query entered).

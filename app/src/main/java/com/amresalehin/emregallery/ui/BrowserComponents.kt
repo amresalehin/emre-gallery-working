@@ -437,6 +437,8 @@ fun BrowserTopBar(
     onNavigate: (String) -> Unit,
     onHamburgerClick: () -> Unit,
     onDiscoveredMediaClick: () -> Unit,
+    onScanPageMedia: (() -> Unit)? = null,
+    isScanningMedia: Boolean = false,
     discoveredCount: Int = 0,
     onNewTabClick: () -> Unit,
     onReloadClick: () -> Unit,
@@ -684,34 +686,48 @@ fun BrowserTopBar(
                 exit = fadeOut(animationSpec = tween(120)) + shrinkHorizontally(animationSpec = tween(120))
             ) {
                 IconButton(
-                    onClick = onDiscoveredMediaClick,
+                    onClick = {
+                        if (discoveredCount == 0 && onScanPageMedia != null && isWebPage) {
+                            onScanPageMedia()
+                        } else {
+                            onDiscoveredMediaClick()
+                        }
+                    },
                     modifier = Modifier
                         .size(42.dp)
                         .testTag("top_bar_download_media_btn")
                 ) {
-                    BadgedBox(
-                        badge = {
-                            if (discoveredCount > 0) {
-                                Badge(
-                                    containerColor = MaterialTheme.colorScheme.primary,
-                                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.testTag("top_bar_media_count_badge")
-                                ) {
-                                    Text(
-                                        text = if (discoveredCount > 99) "99+" else "$discoveredCount",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                    if (isScanningMedia) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        BadgedBox(
+                            badge = {
+                                if (discoveredCount > 0) {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.testTag("top_bar_media_count_badge")
+                                    ) {
+                                        Text(
+                                            text = if (discoveredCount > 99) "99+" else "$discoveredCount",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = if (discoveredCount > 0) "View discovered media" else "Detect media on page",
+                                tint = if (discoveredCount > 0) MaterialTheme.colorScheme.primary else BrowserThemeColors.iconTint(isDark),
+                                modifier = Modifier.size(24.dp)
+                            )
                         }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = "View discovered media",
-                            tint = if (discoveredCount > 0) MaterialTheme.colorScheme.primary else BrowserThemeColors.iconTint(isDark),
-                            modifier = Modifier.size(24.dp)
-                        )
                     }
                 }
             }
@@ -851,6 +867,16 @@ fun BrowserTopBar(
                                 onReloadClick()
                             }
                         )
+                        if (isWebPage && onScanPageMedia != null) {
+                            DropdownMenuItem(
+                                text = { Text("Detect media on page", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
+                                leadingIcon = { Icon(Icons.Default.Download, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },
+                                onClick = {
+                                    showMenu = false
+                                    onScanPageMedia()
+                                }
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Add to Shortcuts", color = BrowserThemeColors.textPrimary(isDark), fontWeight = FontWeight.Medium) },
                             leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null, tint = BrowserThemeColors.iconTint(isDark)) },

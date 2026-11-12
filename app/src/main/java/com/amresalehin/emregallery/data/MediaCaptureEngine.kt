@@ -105,30 +105,90 @@ object MediaCaptureEngine {
                     }
                 }
 
-                // 2. Video Elements & Sources
+                // 2. Video Elements, Sources, and Data Attributes
                 var videos = document.querySelectorAll('video');
                 for (var v = 0; v < videos.length; v++) {
                     var vid = videos[v];
                     var poster = resolveAbs(vid.getAttribute('poster') || vid.poster);
-                    var chosenVideo = null;
-                    if (vid.src && !vid.src.startsWith('blob:') && !vid.src.startsWith('data:')) {
-                        chosenVideo = resolveAbs(vid.src);
-                    } else {
-                        var vsources = vid.querySelectorAll('source');
-                        for (var j = 0; j < vsources.length; j++) {
-                            var vsRaw = vsources[j].src;
-                            if (vsRaw && !vsRaw.startsWith('blob:') && !vsRaw.startsWith('data:')) {
-                                chosenVideo = resolveAbs(vsRaw);
-                                break;
-                            }
+                    var candidateVideoUrls = [];
+
+                    // Direct src or currentSrc
+                    var vSrc = vid.currentSrc || vid.src || vid.getAttribute('src');
+                    if (vSrc && !vSrc.startsWith('blob:') && !vSrc.startsWith('data:')) {
+                        var absVSrc = resolveAbs(vSrc);
+                        if (absVSrc) candidateVideoUrls.push(absVSrc);
+                    }
+
+                    // Data attributes common in HTML5 players
+                    var dataVideo = vid.getAttribute('data-src') || vid.getAttribute('data-video-url') ||
+                                    vid.getAttribute('data-url') || vid.getAttribute('data-hls-url') ||
+                                    vid.getAttribute('data-mp4');
+                    if (dataVideo && !dataVideo.startsWith('blob:') && !dataVideo.startsWith('data:')) {
+                        var absDataVideo = resolveAbs(dataVideo);
+                        if (absDataVideo) candidateVideoUrls.push(absDataVideo);
+                    }
+
+                    // <source> tags inside video
+                    var vsources = vid.querySelectorAll('source');
+                    for (var j = 0; j < vsources.length; j++) {
+                        var vsRaw = vsources[j].src || vsources[j].getAttribute('src') || vsources[j].getAttribute('data-src');
+                        if (vsRaw && !vsRaw.startsWith('blob:') && !vsRaw.startsWith('data:')) {
+                            var absVs = resolveAbs(vsRaw);
+                            if (absVs) candidateVideoUrls.push(absVs);
                         }
                     }
-                    if (chosenVideo) {
-                        list.push({u: chosenVideo, s: 'DOM', p: poster, r: 'video'});
+
+                    if (candidateVideoUrls.length > 0) {
+                        for (var cv = 0; cv < candidateVideoUrls.length; cv++) {
+                            list.push({u: candidateVideoUrls[cv], s: 'DOM', p: poster, r: 'video'});
+                        }
                     } else if (poster) {
                         list.push({u: poster, s: 'POSTER', r: 'poster'});
                     }
                 }
+
+                // 2b. OpenGraph & Twitter video meta tags
+                var metaVideo = document.querySelectorAll('meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"], meta[name="og:video"], meta[name="twitter:player:stream"], meta[property="twitter:player:stream"], link[rel="video_src"]');
+                for (var mv = 0; mv < metaVideo.length; mv++) {
+                    var mvUrl = metaVideo[mv].getAttribute('content') || metaVideo[mv].getAttribute('href');
+                    if (mvUrl && !mvUrl.startsWith('blob:') && !mvUrl.startsWith('data:')) {
+                        var absMv = resolveAbs(mvUrl);
+                        if (absMv) {
+                            list.push({u: absMv, s: 'DOM', r: 'og:video'});
+                        }
+                    }
+                }
+
+                // 2c. Direct video links in anchor tags (e.g. download links)
+                var aLinks = document.querySelectorAll('a[href]');
+                var aCount = Math.min(aLinks.length, 120);
+                for (var al = 0; al < aCount; al++) {
+                    var aHref = aLinks[al].getAttribute('href');
+                    if (aHref && /\.(?:mp4|webm|mkv|mov|m3u8|mpd)(?:[?#]|$)/i.test(aHref)) {
+                        var absA = resolveAbs(aHref);
+                        if (absA) {
+                            var aText = (aLinks[al].innerText || aLinks[al].title || '').trim();
+                            list.push({u: absA, s: 'DOM', r: 'video-link', t: aText});
+                        }
+                    }
+                }
+
+                // 2d. YouTube player streaming data if present
+                try {
+                    var ytResp = window.ytInitialPlayerResponse || (window.ytplayer && window.ytplayer.config && window.ytplayer.config.args && window.ytplayer.config.args.raw_player_response);
+                    if (ytResp && ytResp.streamingData) {
+                        var ytFormats = (ytResp.streamingData.formats || []).concat(ytResp.streamingData.adaptiveFormats || []);
+                        for (var yf = 0; yf < ytFormats.length; yf++) {
+                            var yfObj = ytFormats[yf];
+                            if (yfObj && yfObj.url && !yfObj.url.startsWith('blob:')) {
+                                var absYt = resolveAbs(yfObj.url);
+                                if (absYt) {
+                                    list.push({u: absYt, s: 'DOM', r: (yfObj.qualityLabel || 'video')});
+                                }
+                            }
+                        }
+                    }
+                } catch(e) {}
 
                 // 3. Audio Elements
                 var audios = document.querySelectorAll('audio');
@@ -201,9 +261,11 @@ object MediaCaptureEngine {
                     if (ifr && /\.(?:mp4|webm|mkv|mov|mp3|m4a|wav|jpe?g|png|webp|gif|avif)(?:[?#]|$)/i.test(ifr)) {
                         list.push({u: ifr, s: 'IFRAME', r: 'iframe'});
                     }
-                }
-
-                return JSON.stringify(list);
+                return JSON.stringify({
+                    pageUrl: (window.location && window.location.href) ? window.location.href : '',
+                    pageTitle: document.title || '',
+                    items: list
+                });
             })();
         """.trimIndent()
     }
@@ -578,14 +640,22 @@ object MediaCaptureEngine {
         return null
     }
 
+    data class DomScanPayload(
+        val items: List<ScrapedMediaItem>,
+        val pageUrl: String,
+        val pageTitle: String
+    )
+
     /**
-     * Parses the JSON array returned by getJsDomScanScript().
+     * Parses the JSON payload (array or wrapper object) returned by getJsDomScanScript().
      */
-    fun parseJsDomScanResult(
+    fun parseJsDomScanPayload(
         resultJson: String?,
-        baseUrl: String
-    ): List<ScrapedMediaItem> {
-        if (resultJson.isNullOrBlank() || resultJson == "null") return emptyList()
+        fallbackBaseUrl: String
+    ): DomScanPayload {
+        if (resultJson.isNullOrBlank() || resultJson == "null") {
+            return DomScanPayload(emptyList(), fallbackBaseUrl, "")
+        }
 
         return try {
             val unescaped = if (resultJson.startsWith("\"") && resultJson.endsWith("\"")) {
@@ -594,7 +664,18 @@ object MediaCaptureEngine {
                 resultJson
             }
 
-            val jsonArray = JSONArray(unescaped)
+            val isObject = unescaped.trimStart().startsWith("{")
+            val (jsonArray, effectiveUrl, extractedTitle) = if (isObject) {
+                val rootObj = JSONObject(unescaped)
+                val u = rootObj.optString("pageUrl", fallbackBaseUrl).ifBlank { fallbackBaseUrl }
+                val t = rootObj.optString("pageTitle", "")
+                val arr = rootObj.optJSONArray("items") ?: JSONArray()
+                Triple(arr, u, t)
+            } else {
+                val arr = JSONArray(unescaped)
+                Triple(arr, fallbackBaseUrl, "")
+            }
+
             val results = mutableListOf<ScrapedMediaItem>()
             for (i in 0 until jsonArray.length()) {
                 val obj = jsonArray.getJSONObject(i)
@@ -609,22 +690,34 @@ object MediaCaptureEngine {
                     }
                     val poster = obj.optString("p", "").ifBlank { null }
                     val res = obj.optString("r", "").ifBlank { null }
+                    val titleHint = obj.optString("t", "").ifBlank { null }
                     val item = buildMediaItem(
                         rawUrl = rawUrl,
                         source = source,
-                        baseUrl = baseUrl,
+                        baseUrl = effectiveUrl,
                         poster = poster,
                         resolutionHint = res,
-                        indexHint = i
+                        indexHint = i,
+                        titleHint = titleHint
                     )
                     if (item != null) {
                         results.add(item)
                     }
                 }
             }
-            results
+            DomScanPayload(results, effectiveUrl, extractedTitle)
         } catch (_: Exception) {
-            emptyList()
+            DomScanPayload(emptyList(), fallbackBaseUrl, "")
         }
+    }
+
+    /**
+     * Parses the JSON returned by getJsDomScanScript().
+     */
+    fun parseJsDomScanResult(
+        resultJson: String?,
+        baseUrl: String
+    ): List<ScrapedMediaItem> {
+        return parseJsDomScanPayload(resultJson, baseUrl).items
     }
 }

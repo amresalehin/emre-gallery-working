@@ -40,6 +40,15 @@ class PhotoMapLocationCache(context: Context) :
         val provenance: LocationProvenance? = null
     )
 
+    init {
+        setWriteAheadLoggingEnabled(true)
+    }
+
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        runCatching { db.execSQL("PRAGMA busy_timeout = 5000") }
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -253,7 +262,7 @@ class PhotoMapLocationCache(context: Context) :
             }
 
             val db = writableDatabase
-            db.beginTransaction()
+            db.beginTransactionNonExclusive()
             try {
                 for ((item, point) in extracted) {
                     val values = ContentValues().apply {
@@ -285,6 +294,15 @@ class PhotoMapLocationCache(context: Context) :
     }
 
     companion object {
+        @Volatile
+        private var instance: PhotoMapLocationCache? = null
+
+        fun getInstance(context: Context): PhotoMapLocationCache {
+            return instance ?: synchronized(this) {
+                instance ?: PhotoMapLocationCache(context.applicationContext).also { instance = it }
+            }
+        }
+
         private val ALL_COLUMNS = arrayOf(
             "uri", "latitude", "longitude", "source", "match_method",
             "resolved_timestamp", "timestamp_source", "sample_before_time",

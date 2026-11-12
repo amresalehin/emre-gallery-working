@@ -178,10 +178,14 @@ data class EngineComparisonResult(
 class FaceClusterStore(context: Context) :
     SQLiteOpenHelper(context.applicationContext, DATABASE_NAME, null, DATABASE_VERSION) {
 
+    init {
+        setWriteAheadLoggingEnabled(true)
+    }
+
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
-        db.enableWriteAheadLogging()
         db.setForeignKeyConstraintsEnabled(true)
+        runCatching { db.execSQL("PRAGMA busy_timeout = 5000") }
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -2106,5 +2110,14 @@ class FaceClusterStore(context: Context) :
         fun cosineDistance(a: FloatArray, b: FloatArray): Float = FaceVectorMath.cosineDistance(a, b)
         fun floatsToBytes(values: FloatArray): ByteArray = FaceVectorMath.floatsToBytes(values)
         fun bytesToFloats(bytes: ByteArray): FloatArray = FaceVectorMath.bytesToFloats(bytes)
+
+        @Volatile
+        private var instance: FaceClusterStore? = null
+
+        fun getInstance(context: Context): FaceClusterStore {
+            return instance ?: synchronized(this) {
+                instance ?: FaceClusterStore(context.applicationContext).also { instance = it }
+            }
+        }
     }
 }

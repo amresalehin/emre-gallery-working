@@ -41,7 +41,7 @@ class IndexingStatusViewModel(application: Application) : AndroidViewModel(appli
     }
 
     private val context: Context get() = getApplication()
-    private val faceStore = FaceClusterStore(context.applicationContext)
+    private val faceStore = FaceClusterStore.getInstance(context.applicationContext)
 
     private val _uiState = MutableStateFlow(
         IndexingStatusUiState(
@@ -174,7 +174,7 @@ class IndexingStatusViewModel(application: Application) : AndroidViewModel(appli
                 val eSummaries = faceStore.summaries(EnteFaceConstants.ENGINE_ID)
                 val eFailedList = faceStore.getFailedMedia(facePhotoUris, EnteFaceConstants.ENGINE_ID).map { it.first to (it.second ?: "Detection failed") }
 
-                val locCache = com.amresalehin.emregallery.data.PhotoMapLocationCache(context.applicationContext)
+                val locCache = com.amresalehin.emregallery.data.PhotoMapLocationCache.getInstance(context.applicationContext)
                 val locMap = locCache.loadAll()
                 val lProcessed = photos.count { locMap.containsKey(it.uri) }
                 val lLocated = locMap.values.count { it.point != null }

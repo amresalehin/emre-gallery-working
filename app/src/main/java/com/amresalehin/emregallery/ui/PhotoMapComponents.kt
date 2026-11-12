@@ -540,7 +540,7 @@ fun PhotoMapViewContainer(
                 // key() resets the bar's drag state whenever a different photo is selected.
                 key(selectedMedia.first.uri) {
                     val provenance = remember(selectedMedia.first.uri) {
-                        com.amresalehin.emregallery.data.PhotoMapLocationCache(context).getLocation(selectedMedia.first.uri)?.provenance
+                        com.amresalehin.emregallery.data.PhotoMapLocationCache.getInstance(context).getLocation(selectedMedia.first.uri)?.provenance
                     }
                     SelectedPlaceBar(
                         placeName = selectedPlaceName,

@@ -72,7 +72,8 @@ data class NavBackStackEntry(
     val inboxInitialViewMode: DownloaderViewMode = DownloaderViewMode.ACTIVITY_PAGE,
     val inboxInitialStack: com.amresalehin.emregallery.data.MediaInboxStack? = null,
     val inboxInitialOpenBrowser: Boolean = false,
-    val selectedBookmarkDetailStack: com.amresalehin.emregallery.data.MediaInboxStack? = null
+    val selectedBookmarkDetailStack: com.amresalehin.emregallery.data.MediaInboxStack? = null,
+    val browserInitialUrl: String = ""
 )
 
 val LocalViewerCoordinatedProgress = compositionLocalOf<() -> Float> { { 0f } }
@@ -212,7 +213,7 @@ fun GalleryApp() {
             delay(3000)
             withContext(Dispatchers.IO) {
                 runCatching {
-                    val locationCache = com.amresalehin.emregallery.data.PhotoMapLocationCache(context.applicationContext)
+                    val locationCache = com.amresalehin.emregallery.data.PhotoMapLocationCache.getInstance(context.applicationContext)
                     val safeMedia = media.filter { it.uri !in hidden && !it.isTrashed && it.uri !in inBin }
                     locationCache.scanMediaBatch(context, safeMedia)
                 }
@@ -228,7 +229,7 @@ fun GalleryApp() {
         if (result.resultCode == android.app.Activity.RESULT_OK && deletedUris.isNotEmpty()) {
             scope.launch {
                 withContext(Dispatchers.IO) {
-                    FaceClusterStore(context).deleteMediaCompletely(deletedUris)
+                    FaceClusterStore.getInstance(context).deleteMediaCompletely(deletedUris)
                 }
                 prefs.removePermanently(deletedUris)
                 refreshMedia()
@@ -256,7 +257,7 @@ fun GalleryApp() {
                 }
                 if (deleted.isNotEmpty()) {
                     withContext(Dispatchers.IO) {
-                        FaceClusterStore(context).deleteMediaCompletely(deleted)
+                        FaceClusterStore.getInstance(context).deleteMediaCompletely(deleted)
                     }
                     prefs.removePermanently(deleted)
                     refreshMedia()
@@ -296,7 +297,7 @@ fun GalleryApp() {
                 }
                 if (deleted.isNotEmpty()) {
                     withContext(Dispatchers.IO) {
-                        FaceClusterStore(context).deleteMediaCompletely(deleted)
+                        FaceClusterStore.getInstance(context).deleteMediaCompletely(deleted)
                     }
                     prefs.removePermanently(deleted)
                     refreshMedia()
@@ -534,7 +535,8 @@ fun GalleryApp() {
                     inboxInitialViewMode = inboxInitialViewMode,
                     inboxInitialStack = inboxInitialStack,
                     inboxInitialOpenBrowser = inboxInitialOpenBrowser,
-                    selectedBookmarkDetailStack = selectedBookmarkDetailStack
+                    selectedBookmarkDetailStack = selectedBookmarkDetailStack,
+                    browserInitialUrl = browserInitialUrl
                 )
             )
             previousDestination = destination
@@ -632,6 +634,7 @@ fun GalleryApp() {
                 inboxInitialStack = entry.inboxInitialStack
                 inboxInitialOpenBrowser = entry.inboxInitialOpenBrowser
                 selectedBookmarkDetailStack = entry.selectedBookmarkDetailStack
+                browserInitialUrl = entry.browserInitialUrl
                 previousDestination = backStack.lastOrNull()?.destination ?: Destination.HOME
             }
             destination == Destination.BOOKMARK_DETAIL -> {
@@ -670,7 +673,13 @@ fun GalleryApp() {
                 viewerStoryTitle = null
             }
             destination == Destination.MEDIA_INBOX -> {
-                destination = if (previousDestination == Destination.ALBUMS) Destination.ALBUMS else Destination.SETTINGS
+                destination = if (previousDestination == Destination.BROWSER) {
+                    Destination.BROWSER
+                } else if (previousDestination == Destination.ALBUMS) {
+                    Destination.ALBUMS
+                } else {
+                    Destination.SETTINGS
+                }
                 viewerStoryTitle = null
             }
             destination == Destination.VIEWER -> {
@@ -1352,6 +1361,7 @@ fun GalleryApp() {
                     )
                     Destination.BROWSER -> DirectBrowserView(
                         initialUrl = browserInitialUrl,
+                        onUrlChange = { browserInitialUrl = it },
                         onClose = {
                             browserInitialUrl = ""
                             performBackNavigation()

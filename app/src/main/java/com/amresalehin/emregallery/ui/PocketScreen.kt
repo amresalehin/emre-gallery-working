@@ -528,6 +528,7 @@ fun PocketScreen(
             ) {
                 DirectBrowserView(
                     initialUrl = browserUrl,
+                    onUrlChange = { browserUrl = it },
                     onClose = { showFullScreenBrowser = false },
                     onMenuClick = onMenuClick,
                     onMediaExtracted = {},

@@ -211,7 +211,7 @@ class IndexingForegroundService : Service() {
         } else {
             FaceRecognitionSettings.filterMediaForFaceIndexing(applicationContext, allPhotos) { it.relativePath }
         }
-        val store = FaceClusterStore(applicationContext)
+        val store = FaceClusterStore.getInstance(applicationContext)
         val factory = FaceEngineRegistry.getFactory(engineId) ?: BuffaloLFaceEngineFactory
         val serviceHandle = FaceProcessingCoordinator.beginOperation(
             operationId = "foreground_service_face_$engineId",
@@ -465,7 +465,7 @@ class IndexingForegroundService : Service() {
     private suspend fun runLocation(rescanAll: Boolean) {
         runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) }
         val photos = loadPhotos()
-        val cache = com.amresalehin.emregallery.data.PhotoMapLocationCache(applicationContext)
+        val cache = com.amresalehin.emregallery.data.PhotoMapLocationCache.getInstance(applicationContext)
         if (rescanAll) withContext(Dispatchers.IO) { cache.clearAll() }
         val cached = withContext(Dispatchers.IO) { cache.loadAll() }
         val pending = if (rescanAll) photos else photos.filterNot { cached.containsKey(it.uri) }

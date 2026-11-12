@@ -100,6 +100,7 @@ class SearchEngineTest {
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
+        PhotoMapLocationCache.getInstance(context).clearAll()
         searchEngine = SearchEngine(context)
     }
 
@@ -247,7 +248,8 @@ class SearchEngineTest {
 
     @Test
     fun testSearchMedia_gpsFilters() = runBlocking {
-        val locationCache = PhotoMapLocationCache(context)
+        val locationCache = PhotoMapLocationCache.getInstance(context)
+        locationCache.clearAll()
         locationCache.save("content://media/external/images/media/1", GeoPoint(27.9881, 86.9250))
         locationCache.save("content://media/external/images/media/3", null)
 

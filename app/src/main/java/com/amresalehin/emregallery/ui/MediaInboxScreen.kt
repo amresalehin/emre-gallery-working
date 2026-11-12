@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -90,6 +91,8 @@ fun DiscoveredMediaPage(
     BackHandler { onBack() }
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isExtractingOnDemand by remember { mutableStateOf(false) }
     val tabSession = remember { BrowserSession.getTabSession("tab_main") }
     val tabItems by tabSession.detectedItems.collectAsState()
     val sessionItems by DownloaderSession.discoveredItems.collectAsState()
@@ -266,6 +269,41 @@ fun DiscoveredMediaPage(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
+                    if (sourceUrl.isNotBlank()) {
+                        Spacer(Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isExtractingOnDemand = true
+                                    try {
+                                        val extractor = com.amresalehin.emregallery.data.DualMediaExtractor(context)
+                                        extractor.extract(sourceUrl, this)
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("DiscoveredMediaPage", "Extract on demand failed", e)
+                                    } finally {
+                                        isExtractingOnDemand = false
+                                    }
+                                }
+                            },
+                            enabled = !isExtractingOnDemand,
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.testTag("discovered_media_scan_now_btn")
+                        ) {
+                            if (isExtractingOnDemand) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("Scanning page for media...")
+                            } else {
+                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Scan Page for Media")
+                            }
+                        }
+                    }
                 }
             }
         } else {

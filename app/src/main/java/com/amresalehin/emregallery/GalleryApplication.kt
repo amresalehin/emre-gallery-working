@@ -93,8 +93,6 @@ class GalleryApplication : Application() {
                             try {
                                 val cm = android.webkit.CookieManager.getInstance()
                                 cm.setAcceptCookie(true)
-                                val dummy = android.webkit.WebView(context.applicationContext)
-                                dummy.destroy()
                                 isChromiumWarmedUp = true
                             } catch (_: Throwable) {}
                         }

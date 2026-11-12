@@ -622,7 +622,7 @@ fun ViewerDetailsDrawer(
                                 }
 
                                 withContext(Dispatchers.IO) {
-                                    PhotoMapLocationCache(context).save(item.uri, point)
+                                    PhotoMapLocationCache.getInstance(context).save(item.uri, point)
                                 }
 
                                 val updated = detailsState.metadata.toMutableMap()
